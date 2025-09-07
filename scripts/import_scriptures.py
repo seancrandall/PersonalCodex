@@ -157,6 +157,30 @@ def _text_of(node: Tag | NavigableString) -> str:
     return ""
 
 
+def normalize_text(s: str) -> str:
+    # Fix common mojibake and punctuation; collapse whitespace; trim spaces before punctuation
+    replacements = {
+        "â\x80\x94": "—",  # em dash
+        "â\x80\x93": "–",  # en dash
+        "â\x80\x98": "‘",
+        "â\x80\x99": "’",
+        "â\x80\x9c": "“",
+        "â\x80\x9d": "”",
+        "â\x80\xa6": "…",
+        "Â ": " ",  # non-breaking space artifact
+        "Â": " ",
+    }
+    for k, v in replacements.items():
+        s = s.replace(k, v)
+    # Replace 3+ dots with ellipsis
+    s = re.sub(r"\.\.\.\.+", "…", s)
+    s = re.sub(r"\.\.\.", "…", s)
+    # Collapse whitespace
+    s = re.sub(r"\s+", " ", s)
+    # Remove space before punctuation
+    s = re.sub(r"\s+([,.;:!?])", r"\1", s)
+    return s.strip()
+
 def extract_verses(soup: BeautifulSoup) -> List[Tuple[int, str]]:
     """Extract (VerseNumber, VerseContent) pairs.
 
@@ -206,7 +230,7 @@ def extract_verses(soup: BeautifulSoup) -> List[Tuple[int, str]]:
         unique: List[Tuple[int, str]] = []
         for n, t in verses:
             if n not in seen:
-                unique.append((n, t))
+                unique.append((n, normalize_text(t)))
                 seen.add(n)
         return unique
 
@@ -216,7 +240,7 @@ def extract_verses(soup: BeautifulSoup) -> List[Tuple[int, str]]:
     for p in paragraphs:
         txt = p.get_text(" ", strip=True)
         if txt:
-            fallback.append((n, txt))
+            fallback.append((n, normalize_text(txt)))
             n += 1
     return fallback
 
