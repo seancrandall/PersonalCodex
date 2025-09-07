@@ -1,0 +1,42 @@
+version: "3.9"
+
+# Base Compose for local development (CPU). Use docker-compose.gpu.yml to enable GPUs.
+
+services:
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    environment:
+      - PYTHONUNBUFFERED=1
+      - PYTHONDONTWRITEBYTECODE=1
+      - SQLITE_PATH=/data/personalcodex.db
+      - MODELS_DIR=/data/models
+    volumes:
+      - ./backend:/app
+      - ./volumes:/data
+    working_dir: /app
+    command: bash -lc "uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+    ports:
+      - "8000:8000"
+
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    environment:
+      - NODE_ENV=development
+      - CHOKIDAR_USEPOLLING=true
+    volumes:
+      - ./web:/usr/src/app
+      - /usr/src/app/node_modules
+    working_dir: /usr/src/app
+    command: sh -c "npm ci && npm start"
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+
+volumes:

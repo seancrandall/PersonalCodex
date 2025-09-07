@@ -1,0 +1,15 @@
+version: "3.9"
+
+# GPU override: enable CUDA for the backend container.
+# Usage: docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build
+
+services:
+  api:
+    # Enable all visible GPUs via NVIDIA Container Toolkit
+    # Requires: host NVIDIA drivers + nvidia-docker2 / NVIDIA Container Toolkit
+    gpus: all
+    environment:
+      - CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-all}
+      - TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST:-}
+      - FORCE_CUDA=1
+

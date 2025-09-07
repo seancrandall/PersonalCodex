@@ -1,0 +1,12 @@
+transformers>=4.42.0
+datasets
+peft
+accelerate
+bitsandbytes==0.45.2
+trl
+sentencepiece
+protobuf<5
+psutil
+tqdm
+typing_extensions
+jsonlines
