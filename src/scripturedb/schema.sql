@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS book (
 CREATE TABLE IF NOT EXISTS chapter (
   id INTEGER PRIMARY KEY,
   fkBook INTEGER NOT NULL,
-  ChapterNumber INTEGER NOT NULL CHECK (ChapterNumber > 0),
+  ChapterNumber TEXT NOT NULL,
   ChapterHeading TEXT,
   CONSTRAINT fk_chapter_book FOREIGN KEY (fkBook)
     REFERENCES book(id)
@@ -105,4 +105,3 @@ JOIN chapter c ON c.id = v.fkChapter
 JOIN book b ON b.id = c.fkBook
 JOIN volume vol ON vol.id = b.fkVolume
 ORDER BY vol.id, b.id, c.id, v.VerseNumber;
-

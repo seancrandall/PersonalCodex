@@ -14,6 +14,7 @@ services:
       - PYTHONDONTWRITEBYTECODE=1
       - SQLITE_PATH=/data/personalcodex.db
       - MODELS_DIR=/data/models
+      - STANDARD_WORKS_DB=/data/scripdb/standardworks.db
     volumes:
       - ./backend:/app
       - ./volumes:/data

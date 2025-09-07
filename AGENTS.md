@@ -6,7 +6,7 @@
 - Frontend (React): `web/` with `src/`, `public/`, and `package.json`.
 - Infra & scripts: `infra/` (DB, migrations, model assets) and `scripts/` (utility CLIs).
 
-- ## Build, Test, and Development Commands
+## Build, Test, and Development Commands
 - Start stack (CPU): `docker compose up --build` (starts API and web). The API mounts `./volumes` to `/data` (put SQLite DB, scripts, and model weights here).
 - Start with GPU: `docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build`.
 - Rebuild a service: `docker compose build api` or `docker compose up -d --build web`.
@@ -14,6 +14,10 @@
 - Frontend tests: `docker compose run --rm web npm test -- --watch=false`.
 - Lint/format backend: `docker compose run --rm api ruff check . && black --check .`.
 - Lint/format frontend: `docker compose run --rm web npm run lint && npm run format:check`.
+
+### Initialize Standard Works DB
+- Host Python: `python scripts/init_standardworks_db.py` creates `volumes/scripdb/standardworks.db` from `src/scripturedb/schema.sql`.
+- SQLite CLI (if installed): `sqlite3 volumes/scripdb/standardworks.db < src/scripturedb/schema.sql`.
 
 ## CUDA/Torch Notes
 - Use NVIDIA CUDA base images in `backend/Dockerfile` (e.g., `nvidia/cuda:12-runtime-ubuntu22.04`) and install `torch` matching CUDA.
@@ -33,6 +37,7 @@
 
 ## Security & Configuration Tips
 - Never commit secrets. Use `.env` files referenced by Compose; provide `.env.example`.
+- Key env vars (api): `SQLITE_PATH=/data/personalcodex.db`, `STANDARD_WORKS_DB=/data/scripdb/standardworks.db`, `MODELS_DIR=/data/models`.
 - Pin base images and package versions; avoid downloading model weights at build time—store them under `./volumes/models` and access via `/data/models`.
 
 ## Agent-Specific Instructions
