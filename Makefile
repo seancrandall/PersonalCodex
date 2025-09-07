@@ -2,6 +2,8 @@
 
 DB ?= volumes/scripdb/standardworks.db
 ROOT ?= src/scripturedb/scriptures
+NOTES_DB ?= volumes/notesdb/notes.db
+NOTES_SCHEMA ?= src/notesdb/schema.sql
 
 .PHONY: init-db seed import normalize summary check pipeline clean-db
 
@@ -30,3 +32,22 @@ clean-db:
 	rm -f $(DB)
 	@echo "Removed $(DB)"
 
+# ------------------------------
+# Notes DB (host): build and validate
+# ------------------------------
+.PHONY: notesdb validate-notesdb fill-citations clean-notesdb
+
+notesdb:
+	mkdir -p $(dir $(NOTES_DB))
+	sqlite3 $(NOTES_DB) < $(NOTES_SCHEMA)
+	@echo "Built $(NOTES_DB) from $(NOTES_SCHEMA)"
+
+validate-notesdb:
+	python scripts/validate_notes_passages.py --notes-db $(NOTES_DB) --std-db $(DB)
+
+fill-citations:
+	python scripts/validate_notes_passages.py --notes-db $(NOTES_DB) --std-db $(DB) --fill-citations
+
+clean-notesdb:
+	rm -f $(NOTES_DB)
+	@echo "Removed $(NOTES_DB)"
