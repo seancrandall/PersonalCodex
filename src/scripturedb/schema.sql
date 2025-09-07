@@ -15,6 +15,8 @@ CREATE TABLE IF NOT EXISTS book (
   fkVolume INTEGER NOT NULL,
   BookName TEXT NOT NULL,
   BookHeading TEXT,
+  ShortTitle TEXT,
+  LongTitle TEXT,
   CONSTRAINT fk_book_volume FOREIGN KEY (fkVolume)
     REFERENCES volume(id)
     ON UPDATE CASCADE

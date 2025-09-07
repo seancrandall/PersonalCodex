@@ -157,9 +157,10 @@ def upsert_volume(conn: sqlite3.Connection, name: str) -> int:
 
 
 def upsert_book(conn: sqlite3.Connection, volume_id: int, name: str) -> int:
+    # Use BookName as our canonical key (short title). Also set ShortTitle if empty.
     conn.execute(
-        "INSERT OR IGNORE INTO book(fkVolume, BookName) VALUES (?, ?)",
-        (volume_id, name),
+        "INSERT OR IGNORE INTO book(fkVolume, BookName, ShortTitle) VALUES (?, ?, ?)",
+        (volume_id, name, name),
     )
     row = conn.execute(
         "SELECT id FROM book WHERE fkVolume=? AND BookName=?", (volume_id, name)
@@ -195,4 +196,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

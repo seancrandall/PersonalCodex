@@ -90,16 +90,36 @@ def ensure_volume_book(
     return int(vol_id), int(bid)
 
 
-def extract_heading(soup: BeautifulSoup) -> Optional[str]:
-    for tag in ("h1", "h2"):
-        el = soup.find(tag)
-        if el:
+def extract_book_long_title(soup: BeautifulSoup) -> Optional[str]:
+    # Long title typically in the first h1 before the verses
+    verses = soup.select("p.verse")
+    first_verse = verses[0] if verses else None
+    if first_verse:
+        for el in first_verse.find_all_previous("h1"):
             text = el.get_text(" ", strip=True)
             if text:
                 return text
-    # Fallback: document title
-    if soup.title and soup.title.string:
-        return soup.title.string.strip()
+    h1 = soup.find("h1")
+    if h1:
+        t = h1.get_text(" ", strip=True)
+        if t:
+            return t
+    return None
+
+
+def extract_chapter_heading(soup: BeautifulSoup) -> Optional[str]:
+    # LDS edition provides a study-summary per chapter
+    ss = soup.select_one(".study-summary")
+    if ss:
+        t = ss.get_text(" ", strip=True)
+        if t:
+            return t
+    # Fallback: subtitle near header
+    sub = soup.select_one(".subtitle")
+    if sub:
+        t = sub.get_text(" ", strip=True)
+        if t:
+            return t
     return None
 
 
@@ -120,7 +140,7 @@ def derive_chapter_id_text(path: Path, soup: BeautifulSoup) -> str:
             return label
 
     # Try to find a number in filename, heading, or title
-    for source in (base, extract_heading(soup) or "", getattr(soup.title, "string", "") or ""):
+    for source in (base, extract_book_long_title(soup) or "", getattr(soup.title, "string", "") or ""):
         m = re.search(r"\b(\d+)\b", source)
         if m:
             return m.group(1)
@@ -204,7 +224,7 @@ def extract_verses(soup: BeautifulSoup) -> List[Tuple[int, str]]:
 def parse_chapter_file(path: Path) -> ParsedChapter:
     html = path.read_text(encoding="utf-8", errors="ignore")
     soup = BeautifulSoup(html, "html.parser")
-    heading = extract_heading(soup)
+    heading = extract_chapter_heading(soup)
     chap_id = derive_chapter_id_text(path, soup)
     verses = extract_verses(soup)
     return ParsedChapter(chapter_id_text=chap_id, heading=heading, verses=verses)
@@ -451,6 +471,44 @@ def import_by_filenames(
         )
 
 
+def update_book_metadata_from_first_chapters(
+    conn: sqlite3.Connection, root: Path
+) -> None:
+    # For each known book code, if chapter 1 file exists, extract LongTitle and optional BookHeading
+    for vol_code, books in BOOK_MAP.items():
+        volume_name = VOLUME_MAP.get(vol_code, vol_code)
+        for code, book_name in books.items():
+            chap1 = root / f"{vol_code}_{code}_1.html"
+            if not chap1.exists():
+                continue
+            soup = BeautifulSoup(chap1.read_text(encoding="utf-8", errors="ignore"), "html.parser")
+            long_title = extract_book_long_title(soup)
+            # Prefer a concise book heading: use .subtitle if present, else the first non-trivial paragraph before first verse
+            book_heading = None
+            sub = soup.select_one(".subtitle")
+            if sub:
+                txt = sub.get_text(" ", strip=True)
+                if txt:
+                    book_heading = txt
+            # If no explicit subtitle, leave BookHeading null (not all books have one)
+
+            # Update DB
+            # ShortTitle: prefer our canonical BookName (mapped); LongTitle as parsed; BookHeading optional
+            conn.execute(
+                """
+                UPDATE book
+                SET ShortTitle = COALESCE(ShortTitle, ?),
+                    LongTitle = COALESCE(?, LongTitle),
+                    BookHeading = COALESCE(?, BookHeading)
+                WHERE id IN (
+                    SELECT b.id FROM book b JOIN volume v ON v.id=b.fkVolume
+                    WHERE v.VolumeName=? AND b.BookName=?
+                )
+                """,
+                (book_name, long_title, book_heading, volume_name, book_name),
+            )
+
+
 def discover_and_import(
     conn: sqlite3.Connection, root: Path, clear_chapter: bool, dry_run: bool
 ) -> None:
@@ -514,6 +572,8 @@ def main() -> None:
     args.db.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(args.db) as conn:
         conn.execute("PRAGMA foreign_keys = ON;")
+        # Update book metadata from first chapters (long/short titles and book headings)
+        update_book_metadata_from_first_chapters(conn, args.root)
         discover_and_import(conn, args.root, args.clear_chapter, args.dry_run)
         conn.commit()
 
