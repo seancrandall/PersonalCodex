@@ -249,7 +249,8 @@ def extract_verses(soup: BeautifulSoup) -> List[Tuple[int, str]]:
 def parse_chapter_file(path: Path) -> ParsedChapter:
     html = path.read_text(encoding="utf-8", errors="ignore")
     soup = BeautifulSoup(html, "html.parser")
-    heading = extract_chapter_heading(soup)
+    heading_raw = extract_chapter_heading(soup)
+    heading = normalize_text(heading_raw) if heading_raw else None
     chap_id = derive_chapter_id_text(path, soup)
     verses = extract_verses(soup)
     return ParsedChapter(chapter_id_text=chap_id, heading=heading, verses=verses)
@@ -507,14 +508,15 @@ def update_book_metadata_from_first_chapters(
             if not chap1.exists():
                 continue
             soup = BeautifulSoup(chap1.read_text(encoding="utf-8", errors="ignore"), "html.parser")
-            long_title = extract_book_long_title(soup)
+            long_title_raw = extract_book_long_title(soup)
+            long_title = normalize_text(long_title_raw) if long_title_raw else None
             # Prefer a concise book heading: use .subtitle if present, else the first non-trivial paragraph before first verse
             book_heading = None
             sub = soup.select_one(".subtitle")
             if sub:
                 txt = sub.get_text(" ", strip=True)
                 if txt:
-                    book_heading = txt
+                    book_heading = normalize_text(txt)
             # If no explicit subtitle, leave BookHeading null (not all books have one)
 
             # Update DB

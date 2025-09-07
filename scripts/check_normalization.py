@@ -60,6 +60,17 @@ def main() -> None:
         if count:
             issues.append((desc, count, where))
 
+    # ChapterHeading checks
+    head_checks = [
+        ("mojibake_utf8 (headings)", "ChapterHeading LIKE '%â%' OR ChapterHeading LIKE '%Â%'", "UTF-8 mojibake in ChapterHeading"),
+        ("double_spaces (headings)", "ChapterHeading LIKE '%  %'", "Double spaces in ChapterHeading"),
+        ("ascii_ellipsis (headings)", "ChapterHeading LIKE '%...%'", "ASCII ellipses '...' in ChapterHeading"),
+    ]
+    for key, where, desc in head_checks:
+        count = q(con, f"SELECT COUNT(*) FROM chapter WHERE {where}")
+        if count:
+            issues.append((desc, count, where))
+
     if not issues:
         print("OK: verse text normalized.")
         return
@@ -74,4 +85,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
