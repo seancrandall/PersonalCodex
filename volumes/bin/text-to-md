@@ -1,0 +1,25 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import os
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description="Convert text-like docs to Markdown via pandoc (scaffold)")
+    ap.add_argument("input", help="Input file path (txt, md, rtf, docx, doc, odt, html, tex, epub)")
+    ap.add_argument("--outdir", default=os.environ.get("OCR_DIR", "/data/ocr"))
+    ap.add_argument("--pandoc-args", nargs=argparse.REMAINDER, help="Extra args passed to pandoc")
+    ap.add_argument("--dry-run", action="store_true")
+    args = ap.parse_args()
+    print(f"[text-to-md] input={args.input} outdir={args.outdir} extra={args.pandoc-args}")
+    if args.dry_run:
+        print("[text-to-md] Dry run; not invoking pandoc.")
+        return 0
+    print("[text-to-md] Scaffold only; integrate pandoc next.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+

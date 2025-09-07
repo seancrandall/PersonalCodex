@@ -1,0 +1,28 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import os
+from pathlib import Path
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description="PDF → per-page PNG/TXT scaffold (no-op)")
+    ap.add_argument("input", help="PDF file path")
+    ap.add_argument("--outdir", default=os.environ.get("OCR_DIR", "/data/ocr"))
+    ap.add_argument("--dpi", type=int, default=300)
+    ap.add_argument("--mode", choices=["auto", "rasterize", "extract-text"], default="auto")
+    ap.add_argument("--page-range", help="e.g. 1-3,5,7")
+    ap.add_argument("--dry-run", action="store_true")
+    args = ap.parse_args()
+    print(f"[pdf-to-pages] input={args.input} outdir={args.outdir} dpi={args.dpi} mode={args.mode} range={args.page_range}")
+    if args.dry_run:
+        print("[pdf-to-pages] Dry run; not producing outputs.")
+        return 0
+    print("[pdf-to-pages] Scaffold only; implement rendering/extraction next.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+
