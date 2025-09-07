@@ -12,6 +12,7 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - PYTHONDONTWRITEBYTECODE=1
+      - PATH=/data/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
       - SQLITE_PATH=/data/personalcodex.db
       - MODELS_DIR=/data/models
       - STANDARD_WORKS_DB=/data/scripdb/standardworks.db
@@ -22,6 +23,25 @@ services:
     command: bash -lc "uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
     ports:
       - "8000:8000"
+
+  ingest:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    environment:
+      - PATH=/data/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      - NEWDATA_DIR=/data/newdata
+      - IMAGES_DIR=/data/images
+      - OCR_DIR=/data/ocr
+      - NOTES_DB=/data/notesdb/notes.db
+      - STANDARD_WORKS_DB=/data/scripdb/standardworks.db
+    volumes:
+      - ./volumes:/data
+    working_dir: /
+    command: ["/data/bin/ingest-sanity.sh"]
+    restart: "no"
 
   web:
     build:
@@ -34,7 +54,7 @@ services:
       - ./web:/usr/src/app
       - /usr/src/app/node_modules
     working_dir: /usr/src/app
-    command: sh -c "npm ci && npm start"
+    command: sh -c "npm install && npm run dev -- --host --port 3000"
     ports:
       - "3000:3000"
     depends_on:
