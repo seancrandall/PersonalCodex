@@ -64,3 +64,11 @@ Manual build (without Make)
 Notes
 - Personal data under `volumes/*` is ignored by Git except `volumes/bin/` and `volumes/scripdb/`.
 - Passage verse IDs reference `standardworks.db`; validation is done by attaching that DB during checks.
+
+Helper CLI
+- `volumes/bin/notesdb-rebuild.sh` — rebuilds the notes DB from schema and validates passages.
+  - Usage: `volumes/bin/notesdb-rebuild.sh [--fill] [--dry-run] [--notes-db PATH] [--schema PATH] [--std-db PATH]`
+  - Examples:
+    - Rebuild + validate: `volumes/bin/notesdb-rebuild.sh`
+    - Rebuild + validate + fill citations: `volumes/bin/notesdb-rebuild.sh --fill`
+    - Preview citation fills only: `volumes/bin/notesdb-rebuild.sh --fill --dry-run`
