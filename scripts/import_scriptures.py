@@ -169,6 +169,7 @@ def normalize_text(s: str) -> str:
         "â\x80\xa6": "…",
         "Â ": " ",  # non-breaking space artifact
         "Â": " ",
+        "â": "",
     }
     for k, v in replacements.items():
         s = s.replace(k, v)
