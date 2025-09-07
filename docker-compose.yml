@@ -60,4 +60,4 @@ services:
     depends_on:
       - api
 
-volumes:
+  
