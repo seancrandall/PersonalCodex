@@ -26,7 +26,7 @@ services:
       - "8000:8000"
 
   ingest:
-    image: jbarlow/ocrmypdf:latest
+    image: jbarlow83/ocrmypdf:latest
     gpus: all
     env_file:
       - .env
