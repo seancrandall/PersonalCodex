@@ -27,8 +27,9 @@ services:
 
   ingest:
     build:
-      context: ./infra/ingest
+      context: ./infra/ingest-gpu
       dockerfile: Dockerfile
+      network: host
     gpus: all
     env_file:
       - .env
