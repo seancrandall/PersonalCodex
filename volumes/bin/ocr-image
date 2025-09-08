@@ -118,6 +118,75 @@ def process_path_with_tesseract(path: Path, lang: str, psm: int, oem: int) -> in
     return count
 
 
+def process_path_with_doctr(path: Path) -> int:
+    try:
+        from doctr.models import ocr_predictor  # type: ignore
+        from PIL import Image
+        import numpy as np
+    except Exception as e:
+        print(f"[ocr-image] doctr prerequisites missing ({e}); skipping doctr.")
+        return 0
+    predictor = ocr_predictor(pretrained=True)
+    images: List[Path] = []
+    if path.is_dir():
+        images = sorted([p for p in path.iterdir() if p.suffix.lower() in {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp"}])
+    else:
+        images = [path]
+    count = 0
+    for img_path in images:
+        try:
+            img = Image.open(str(img_path)).convert("RGB")
+        except Exception as e:
+            print(f"[ocr-image] failed to open {img_path}: {e}")
+            continue
+        w, h = img.size
+        try:
+            result = predictor([np.array(img)])
+        except Exception as e:
+            print(f"[ocr-image] doctr failed on {img_path}: {e}")
+            continue
+        export = result[0].export()
+        blocks: List[Dict[str, Any]] = []
+        for block in export.get("pages", [{}])[0].get("blocks", []):
+            for line in block.get("lines", []):
+                words = line.get("words", [])
+                texts = [w.get("value", "") for w in words if w.get("value")]
+                if not texts:
+                    continue
+                xs: List[float] = []
+                ys: List[float] = []
+                confs: List[float] = []
+                for wdict in words:
+                    geom = wdict.get("geometry") or []
+                    if geom and len(geom) == 2:
+                        (x0, y0), (x1, y1) = geom
+                        xs.extend([x0 * w, x1 * w])
+                        ys.extend([y0 * h, y1 * h])
+                    c = wdict.get("confidence")
+                    if c is not None:
+                        try:
+                            confs.append(float(c))
+                        except Exception:
+                            pass
+                if not xs or not ys:
+                    continue
+                bbox = [float(min(xs)), float(min(ys)), float(max(xs)), float(max(ys))]
+                avg_conf = float(sum(confs) / len(confs)) if confs else None
+                blocks.append({
+                    "bbox": bbox,
+                    "content": " ".join(texts).strip(),
+                    "block_type": "line",
+                    "confidence": avg_conf,
+                })
+        json_path = img_path.with_suffix(".ocr.json")
+        txt_path = img_path.with_suffix(".txt")
+        txt = "\n".join([b["content"] for b in blocks if b.get("content")]) + "\n"
+        json_path.write_text(json.dumps({"page": None, "blocks": blocks}, ensure_ascii=False, indent=2), encoding="utf-8")
+        txt_path.write_text(txt, encoding="utf-8")
+        print(f"[ocr-image] wrote {json_path.name} and {txt_path.name} (doctr)")
+        count += 1
+    return count
+
 def process_path_with_paddle(path: Path, lang: str) -> int:
     try:
         from paddleocr import PaddleOCR  # type: ignore
@@ -162,9 +231,9 @@ def process_path_with_paddle(path: Path, lang: str) -> int:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="OCR an image or directory of images (tesseract → paddle fallback)")
+    ap = argparse.ArgumentParser(description="OCR an image or directory of images (doctr → tesseract → paddle)")
     ap.add_argument("input", help="Image path or directory containing images")
-    ap.add_argument("--engine", default=os.environ.get("OCR_ENGINE", "auto"), choices=["auto", "tesseract", "paddle"])  # auto tries tesseract then paddle
+    ap.add_argument("--engine", default=os.environ.get("OCR_ENGINE", "auto"), choices=["auto", "doctr", "tesseract", "paddle"])  # auto tries doctr, then tesseract, then paddle
     ap.add_argument("--langs", default=os.environ.get("OCR_LANGS", "eng"))
     ap.add_argument("--psm", type=int, default=int(os.environ.get("TESSERACT_PSM", "3")))
     ap.add_argument("--oem", type=int, default=int(os.environ.get("TESSERACT_OEM", "1")))
@@ -175,6 +244,12 @@ def main() -> int:
     if args.dry_run:
         print("[ocr-image] Dry run; not invoking OCR.")
         return 0
+    if args.engine in ("auto", "doctr"):
+        n = process_path_with_doctr(path)
+        if args.engine == "doctr":
+            return 0 if n >= 0 else 1
+        if n > 0:
+            return 0
     if args.engine in ("auto", "tesseract"):
         try:
             return 0 if process_path_with_tesseract(path, args.langs, args.psm, args.oem) >= 0 else 1
