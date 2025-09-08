@@ -32,7 +32,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--notes-db", default=os.environ.get("NOTES_DB", "/data/notesdb/notes.db"))
     p.add_argument("--engine", default=os.environ.get("OCR_ENGINE", "tesseract"), help="OCR engine: tesseract|paddle")
     p.add_argument("--langs", default=os.environ.get("OCR_LANGS", "eng"), help="OCR language codes")
-    p.add_argument("--move-processed", action="store_true", help="Move processed files to _processed")
+    env_move = os.environ.get("MOVE_PROCESSED", "1").lower() in ("1", "true", "yes", "on")
+    p.add_argument("--move-processed", action="store_true", default=env_move, help="Move processed files to _processed (env MOVE_PROCESSED)")
     p.add_argument("--since", help="Only process files modified since this ISO timestamp or epoch seconds")
     p.add_argument("--max-workers", type=int, default=1)
     p.add_argument("--watch", action="store_true", help="Watch for new files (not implemented in scaffold)")
@@ -96,6 +97,19 @@ def main() -> int:
         subprocess.run(cmd, check=True)
 
         if not args.dry_run:
+            # Load meta and decide if text was extracted
+            meta_path = ocr_root / "meta.json"
+            try:
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            except Exception as e:
+                print(f"[ingest] Failed reading meta for {pdf}: {e}")
+                continue
+
+            total_blocks = int(meta.get("total_blocks", 0))
+            if total_blocks <= 0:
+                print(f"[ingest] No text detected in {pdf}; leaving source in place. (OCR not yet enabled)")
+                continue
+
             # 2) move-images
             subprocess.run([
                 "move-images",

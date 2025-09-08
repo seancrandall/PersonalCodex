@@ -45,12 +45,14 @@ def render_and_extract(pdf_path: Path, out_root: Path, dpi: int, pages: Iterable
     out_pages = out_root / "pages"
     out_pages.mkdir(parents=True, exist_ok=True)
     doc = fitz.open(pdf_path)
+    total_blocks = 0
     meta = {
         "source": str(pdf_path),
         "page_count": doc.page_count,
         "dpi": dpi,
         "mode": mode,
         "pages": [],
+        "total_blocks": 0,
     }
     for pno in pages:
         page = doc.load_page(pno - 1)
@@ -82,9 +84,10 @@ def render_and_extract(pdf_path: Path, out_root: Path, dpi: int, pages: Iterable
         json_path = out_pages / f"page-{pno:04d}.blocks.json"
         with open(json_path, "w", encoding="utf-8") as f:
             json.dump({"page": pno, "blocks": norm_blocks}, f, ensure_ascii=False, indent=2)
-
-        meta["pages"].append({"page": pno, "png": str(png_path), "blocks_json": str(json_path)})
+        total_blocks += len(norm_blocks)
+        meta["pages"].append({"page": pno, "png": str(png_path), "blocks_json": str(json_path), "blocks_count": len(norm_blocks)})
     # Write summary
+    meta["total_blocks"] = total_blocks
     with open(out_root / "meta.json", "w", encoding="utf-8") as f:
         json.dump(meta, f, ensure_ascii=False, indent=2)
     return meta
