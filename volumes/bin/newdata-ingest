@@ -67,28 +67,6 @@ def main() -> int:
     processed_dir = root / "processed"
     processed_dir.mkdir(parents=True, exist_ok=True)
 
-    # Optionally check for embedded text before processing
-    def has_text_layer(path: Path) -> bool:
-        try:
-            import fitz  # type: ignore
-        except Exception:
-            # install PyMuPDF quickly (wheel only)
-            subprocess.run([sys.executable, "-m", "pip", "install", "--quiet", "--only-binary", ":all:", "pymupdf==1.24.11"], check=True)
-            import fitz  # type: ignore  # noqa: F401
-        try:
-            doc = fitz.open(path)
-        except Exception:
-            return False
-        min_chars = int(os.environ.get("PDF_TEXT_MIN_CHARS", "40"))
-        found = False
-        for i in range(min(5, doc.page_count)):
-            t = doc.load_page(i).get_text("text") or ""
-            if len(t.strip()) >= min_chars:
-                found = True
-                break
-        doc.close()
-        return found
-
     for pdf in sorted(files):
         # Compute sha for stable ocr dir and naming
         h = hashlib.sha256()
@@ -104,7 +82,6 @@ def main() -> int:
             print(f"[ingest] Skip already processed {pdf} ({sha})")
             continue
 
-        has_text = has_text_layer(pdf)
         print(f"[ingest] Processing {pdf} → sha={sha}")
         # 1) pdf-to-pages (always render pages)
         cmd = [
@@ -123,27 +100,16 @@ def main() -> int:
 
         if not args.dry_run:
             success = False
-            if has_text:
-                # Load meta and decide if text was extracted
-                meta_path = ocr_root / "meta.json"
-                try:
-                    meta = json.loads(meta_path.read_text(encoding="utf-8"))
-                    total_blocks = int(meta.get("total_blocks", 0))
-                    success = total_blocks > 0
-                except Exception as e:
-                    print(f"[ingest] Failed reading meta for {pdf}: {e}")
-                    success = False
+            # Always run OCR over rendered pages (tesseract available in image)
+            try:
+                subprocess.run(["ocr-image", str(pages_dir)], check=True)
+            except subprocess.CalledProcessError as e:
+                print(f"[ingest] OCR failed for {pdf}: {e}")
+                success = False
             else:
-                # Run OCR over rendered pages (tesseract or paddle fallback). If it fails, leave file in place.
-                try:
-                    subprocess.run(["ocr-image", str(pages_dir)], check=True)
-                except subprocess.CalledProcessError as e:
-                    print(f"[ingest] OCR failed for {pdf}: {e}")
-                    success = False
-                else:
-                    # Consider success if any OCR JSON exists
-                    ocr_jsons = list(pages_dir.glob("*.ocr.json"))
-                    success = len(ocr_jsons) > 0
+                # Consider success if any OCR JSON exists
+                ocr_jsons = list(pages_dir.glob("*.ocr.json"))
+                success = len(ocr_jsons) > 0
 
             if not success:
                 print(f"[ingest] No text detected for {pdf}; leaving source in place.")
