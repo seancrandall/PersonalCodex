@@ -72,8 +72,8 @@ def main() -> int:
         try:
             import fitz  # type: ignore
         except Exception:
-            # install PyMuPDF to check quickly
-            subprocess.run([sys.executable, "-m", "pip", "install", "--quiet", "PyMuPDF>=1.23.7"], check=True)
+            # install PyMuPDF quickly (wheel only)
+            subprocess.run([sys.executable, "-m", "pip", "install", "--quiet", "--only-binary", ":all:", "pymupdf==1.24.11"], check=True)
             import fitz  # type: ignore  # noqa: F401
         try:
             doc = fitz.open(path)
@@ -134,11 +134,16 @@ def main() -> int:
                     print(f"[ingest] Failed reading meta for {pdf}: {e}")
                     success = False
             else:
-                # Run OCR over rendered pages
-                subprocess.run(["ocr-image", str(pages_dir)], check=True)
-                # Consider success if any OCR JSON exists
-                ocr_jsons = list(pages_dir.glob("*.ocr.json"))
-                success = len(ocr_jsons) > 0
+                # Run OCR over rendered pages (tesseract or paddle fallback). If it fails, leave file in place.
+                try:
+                    subprocess.run(["ocr-image", str(pages_dir)], check=True)
+                except subprocess.CalledProcessError as e:
+                    print(f"[ingest] OCR failed for {pdf}: {e}")
+                    success = False
+                else:
+                    # Consider success if any OCR JSON exists
+                    ocr_jsons = list(pages_dir.glob("*.ocr.json"))
+                    success = len(ocr_jsons) > 0
 
             if not success:
                 print(f"[ingest] No text detected for {pdf}; leaving source in place.")

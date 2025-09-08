@@ -122,7 +122,30 @@ def process_path_with_paddle(path: Path, lang: str) -> int:
     try:
         from paddleocr import PaddleOCR  # type: ignore
     except Exception:
-        subprocess.check_call(["python", "-m", "pip", "install", "--quiet", "paddleocr==2.7.0.3", "paddlepaddle==2.6.1"])
+        try:
+            subprocess.check_call([
+                "python",
+                "-m",
+                "pip",
+                "install",
+                "--quiet",
+                # Attempt to install binary wheels
+                "--only-binary",
+                ":all:",
+                "paddleocr==2.7.0.3",
+                "paddlepaddle==2.6.1",
+            ])
+        except subprocess.CalledProcessError:
+            # Retry without only-binary; may need to fetch from default indexes
+            subprocess.check_call([
+                "python",
+                "-m",
+                "pip",
+                "install",
+                "--quiet",
+                "paddleocr==2.7.0.3",
+                "paddlepaddle==2.6.1",
+            ])
         from paddleocr import PaddleOCR  # type: ignore
 
     ocr = PaddleOCR(use_angle_cls=True, lang="en" if lang.startswith("en") else "en", show_log=False)  # basic EN; extend later

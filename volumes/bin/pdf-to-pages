@@ -15,8 +15,18 @@ def ensure_pymupdf() -> None:
     try:
         import fitz  # noqa: F401
     except Exception:
-        print("[pdf-to-pages] Installing PyMuPDF...", file=sys.stderr)
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "--quiet", "PyMuPDF>=1.23.7"])  # type: ignore
+        print("[pdf-to-pages] Installing PyMuPDF wheel...", file=sys.stderr)
+        # Force binary wheel to avoid building MuPDF from source
+        subprocess.check_call([
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "--quiet",
+            "--only-binary",
+            ":all:",
+            "pymupdf==1.24.11",
+        ])
 
 
 def parse_page_range(spec: str | None, page_count: int) -> List[int]:
