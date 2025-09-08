@@ -42,7 +42,7 @@ services:
     volumes:
       - ./volumes:/data
     working_dir: /
-    command: ["/data/bin/ingest-sanity.sh"]
+    command: ["newdata-ingest"]
     restart: "no"
 
   web:
