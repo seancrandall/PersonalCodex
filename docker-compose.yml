@@ -1,4 +1,4 @@
-# Base Compose for local development (CPU). Use docker-compose.gpu.yml to enable GPUs.
+# Default to GPU-enabled runtime when NVIDIA toolkit is available.
 
 services:
   api:
@@ -6,12 +6,14 @@ services:
       context: ./backend
       dockerfile: Dockerfile
       network: host
+    gpus: all
     env_file:
       - .env
     environment:
       - PYTHONUNBUFFERED=1
       - PYTHONDONTWRITEBYTECODE=1
       - PATH=/data/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      - CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-all}
       - SQLITE_PATH=/data/personalcodex.db
       - MODELS_DIR=/data/models
       - STANDARD_WORKS_DB=/data/scripdb/standardworks.db
@@ -25,10 +27,12 @@ services:
 
   ingest:
     image: python:3.11
+    gpus: all
     env_file:
       - .env
     environment:
       - PATH=/data/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      - CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-all}
       - NEWDATA_DIR=/data/newdata
       - IMAGES_DIR=/data/images
       - OCR_DIR=/data/ocr
