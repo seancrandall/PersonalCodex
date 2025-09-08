@@ -1,5 +1,3 @@
-version: "3.9"
-
 # Base Compose for local development (CPU). Use docker-compose.gpu.yml to enable GPUs.
 
 services:
@@ -26,10 +24,7 @@ services:
       - "8000:8000"
 
   ingest:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-      network: host
+    image: python:3.11
     env_file:
       - .env
     environment:

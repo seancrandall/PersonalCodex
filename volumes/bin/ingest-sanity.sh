@@ -1,5 +1,5 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/sh
+set -eu
 
 export PATH="/data/bin:${PATH}"
 
@@ -9,7 +9,8 @@ echo "[sanity] Starting ingestion sanity run (dry-run stubs)"
 echo "[sanity] 1) newdata-ingest --dry-run"
 newdata-ingest --dry-run || true
 
-if compgen -G "/data/newdata/*" > /dev/null; then
+set -- /data/newdata/*
+if [ -e "$1" ]; then
   echo "[sanity] 2) classify-doc on /data/newdata/*"
   classify-doc /data/newdata/* || true
 else
@@ -29,4 +30,3 @@ echo "[sanity] 6) index-notes --dry-run"
 index-notes --dry-run || true
 
 echo "[sanity] Done."
-
