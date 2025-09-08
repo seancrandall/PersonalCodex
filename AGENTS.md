@@ -68,3 +68,9 @@
 ## Agent-Specific Instructions
 - Prefer dockerized workflows; avoid host-specific steps. If adding services, update `compose.yml` and document ports/env.
 - Keep patches minimal and aligned to the structure above; discuss major tooling changes in an issue first.
+
+### Modularity & Scripts
+- Prefer a practical, modular design: small, focused scripts and components that compose well. Avoid monoliths when a simple seam helps maintainability.
+- All runtime/ingestion scripts should live under `volumes/bin/` in the repo and are mounted into containers at `/data/bin/`.
+- Ensure `/data/bin` is on the PATH for containers that need these tools (compose already sets this for `api` and `ingest`).
+- Keep orchestrators thin (dispatch, logging, idempotency) and delegate heavy lifting to dedicated subcommands.
