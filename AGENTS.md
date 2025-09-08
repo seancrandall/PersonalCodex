@@ -1,5 +1,18 @@
 # Repository Guidelines
 
+## Project Goals & Scope
+- Provide a self-hosted web UI to review handwritten scripture notes and general journals, with fast search, tagging, and filtering.
+- Consolidate notes from scans (paper → PDFs/images) and existing text files into a single, queryable notes store.
+- Correlate notes to the scriptures (Standard Works) with robust cross-references (book/chapter/verse), backlinks, and citations.
+- Enable OCR for scanned documents, emitting per-page JSON and plain text with confidence and bounding boxes for future footnotes/citations.
+- Support full‑text search across notes and scriptures, plus tags, collections, and simple metadata (dates, sources, notebooks).
+- Keep data local-first and private by default; avoid external services. All runtime is containerized via Docker Compose.
+
+## Containerization
+- The stack runs in containers (API + web) via `docker compose`; use the GPU override file to enable CUDA when available.
+- Persist data and models under `./volumes` on the host, mounted to `/data` in containers (`/data/scripdb`, `/data/ocr`, `/data/scans`, `/data/models`).
+- Configure via `.env` (see `.env.example`) with key vars: `SQLITE_PATH`, `STANDARD_WORKS_DB`, `MODELS_DIR`. Do not commit secrets.
+
 ## Project Structure & Module Organization
 - Root: `docker-compose.yml`, optional `docker-compose.gpu.yml`, `AGENTS.md`, `README.md`.
 - Backend (Python): `backend/` with package code in `backend/personal_codex/` and tests in `backend/tests/` (mirrors package path).
@@ -14,6 +27,11 @@
 - Frontend tests: `docker compose run --rm web npm test -- --watch=false`.
 - Lint/format backend: `docker compose run --rm api ruff check . && black --check .`.
 - Lint/format frontend: `docker compose run --rm web npm run lint && npm run format:check`.
+
+### Scriptures: DB Pipeline
+- Make targets (host Python): `make pipeline` runs import → normalize → summary → check.
+- Entry scripts: `scripts/init_standardworks_db.py`, `scripts/seed_standardworks.py`, `scripts/import_scriptures.py` (HTML → chapters/verses), `scripts/normalize_verses.py`, `scripts/normalize_metadata.py`, `scripts/summary_standardworks.py`, `scripts/check_normalization.py`.
+- Data roots: HTML under `src/scripturedb/scriptures/`; DB at `volumes/scripdb/standardworks.db` (also via `STANDARD_WORKS_DB`).
 
 ### Initialize Standard Works DB
 - Host Python: `python scripts/init_standardworks_db.py` creates `volumes/scripdb/standardworks.db` from `src/scripturedb/schema.sql`.
@@ -39,6 +57,13 @@
 - Never commit secrets. Use `.env` files referenced by Compose; provide `.env.example`.
 - Key env vars (api): `SQLITE_PATH=/data/personalcodex.db`, `STANDARD_WORKS_DB=/data/scripdb/standardworks.db`, `MODELS_DIR=/data/models`.
 - Pin base images and package versions; avoid downloading model weights at build time—store them under `./volumes/models` and access via `/data/models`.
+
+## Next Task: Scanned Files (OCR) – Guidance
+- Input/outputs: place scans under `volumes/scans/` (host) → `/data/scans/` (api). Write OCR artifacts to `volumes/ocr/` → `/data/ocr/` and persist extracted text to notes DB at `SQLITE_PATH`.
+- GPU usage: prefer CUDA models (Torch + OCR) when available; run on host or via Compose GPU override. Respect `MODELS_DIR=/data/models` for weights.
+- Suggested layout: add scripts under `scripts/` (e.g., `scripts/ocr_import.py`) or a `backend/personal_codex/ocr/` module if integrating with the API.
+- Conventions: process PDFs and images; chunk pages; emit per-page JSON and plain text; capture confidence and bounding boxes for future footnotes/citations.
+- Testing: provide a small sample in `volumes/scans/sample/` and a dry-run mode that reads one file and prints a summary.
 
 ## Agent-Specific Instructions
 - Prefer dockerized workflows; avoid host-specific steps. If adding services, update `compose.yml` and document ports/env.
