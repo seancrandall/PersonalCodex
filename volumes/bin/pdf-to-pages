@@ -2,27 +2,128 @@
 from __future__ import annotations
 
 import argparse
+import json
+import math
 import os
+import subprocess
+import sys
 from pathlib import Path
+from typing import Iterable, List, Tuple
+
+
+def ensure_pymupdf() -> None:
+    try:
+        import fitz  # noqa: F401
+    except Exception:
+        print("[pdf-to-pages] Installing PyMuPDF...", file=sys.stderr)
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "--quiet", "PyMuPDF>=1.23.7"])  # type: ignore
+
+
+def parse_page_range(spec: str | None, page_count: int) -> List[int]:
+    if not spec:
+        return list(range(1, page_count + 1))
+    pages: set[int] = set()
+    for part in spec.split(","):
+        part = part.strip()
+        if "-" in part:
+            a, b = part.split("-", 1)
+            start = int(a)
+            end = int(b)
+            for p in range(start, end + 1):
+                if 1 <= p <= page_count:
+                    pages.add(p)
+        else:
+            p = int(part)
+            if 1 <= p <= page_count:
+                pages.add(p)
+    return sorted(pages)
+
+
+def render_and_extract(pdf_path: Path, out_root: Path, dpi: int, pages: Iterable[int], mode: str) -> dict:
+    import fitz  # type: ignore
+
+    out_pages = out_root / "pages"
+    out_pages.mkdir(parents=True, exist_ok=True)
+    doc = fitz.open(pdf_path)
+    meta = {
+        "source": str(pdf_path),
+        "page_count": doc.page_count,
+        "dpi": dpi,
+        "mode": mode,
+        "pages": [],
+    }
+    for pno in pages:
+        page = doc.load_page(pno - 1)
+        # Render to PNG
+        zoom = dpi / 72.0
+        mat = fitz.Matrix(zoom, zoom)
+        pix = page.get_pixmap(matrix=mat, alpha=False)
+        png_path = out_pages / f"page-{pno:04d}.png"
+        pix.save(png_path)
+
+        # Extract blocks (paragraph-like). PyMuPDF returns blocks with coords and text
+        blocks = page.get_text("blocks")  # list of (x0,y0,x1,y1, text, block_no, block_type)
+        norm_blocks = []
+        for blk in blocks or []:
+            if len(blk) < 5:
+                continue
+            x0, y0, x1, y1, txt = blk[:5]
+            text = (txt or "").strip()
+            if not text:
+                continue
+            norm_blocks.append({
+                "bbox": [x0, y0, x1, y1],
+                "content": text,
+                "block_type": "paragraph",
+                "confidence": None,
+            })
+        # Sort by y, then x
+        norm_blocks.sort(key=lambda b: (round(b["bbox"][1], 2), round(b["bbox"][0], 2)))
+        json_path = out_pages / f"page-{pno:04d}.blocks.json"
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump({"page": pno, "blocks": norm_blocks}, f, ensure_ascii=False, indent=2)
+
+        meta["pages"].append({"page": pno, "png": str(png_path), "blocks_json": str(json_path)})
+    # Write summary
+    with open(out_root / "meta.json", "w", encoding="utf-8") as f:
+        json.dump(meta, f, ensure_ascii=False, indent=2)
+    return meta
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="PDF → per-page PNG/TXT scaffold (no-op)")
+    ap = argparse.ArgumentParser(description="PDF → per-page PNG + block JSON via PyMuPDF")
     ap.add_argument("input", help="PDF file path")
-    ap.add_argument("--outdir", default=os.environ.get("OCR_DIR", "/data/ocr"))
+    ap.add_argument("--outdir", default=os.environ.get("OCR_DIR", "/data/ocr"), help="Output root (will create a subdir)")
+    ap.add_argument("--subdir", help="Optional subdir name under outdir (e.g., a hash)")
     ap.add_argument("--dpi", type=int, default=300)
     ap.add_argument("--mode", choices=["auto", "rasterize", "extract-text"], default="auto")
     ap.add_argument("--page-range", help="e.g. 1-3,5,7")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
-    print(f"[pdf-to-pages] input={args.input} outdir={args.outdir} dpi={args.dpi} mode={args.mode} range={args.page_range}")
+
+    pdf = Path(args.input)
+    out_root = Path(args.outdir)
+    if args.subdir:
+        out_root = out_root / args.subdir
+    out_root.mkdir(parents=True, exist_ok=True)
+
+    print(f"[pdf-to-pages] input={pdf} out={out_root} dpi={args.dpi} mode={args.mode} range={args.page_range}")
     if args.dry_run:
         print("[pdf-to-pages] Dry run; not producing outputs.")
         return 0
-    print("[pdf-to-pages] Scaffold only; implement rendering/extraction next.")
+
+    ensure_pymupdf()
+    import fitz  # noqa: F401
+
+    # Determine pages
+    doc = fitz.open(pdf)
+    pages = parse_page_range(args.page_range, doc.page_count)
+    doc.close()
+
+    meta = render_and_extract(pdf, out_root, args.dpi, pages, args.mode)
+    print(f"[pdf-to-pages] Wrote {len(meta['pages'])} pages under {out_root}")
     return 0
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

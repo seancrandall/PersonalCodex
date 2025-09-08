@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """
-Scan /data/newdata for inputs and dispatch to OCR or text conversion workers.
+Scan /data/newdata for inputs and run the PDF → pages → blocks → images → markdown pipeline.
 
-This is a scaffold: it prints what it would do, honoring --dry-run.
-Intended to run inside the container with /data/bin in PATH.
+Modular steps (PDFs first):
+- pdf-to-pages: per-page PNG + blocks metadata under /data/ocr/<sha>/
+- move-images: move PNGs to /data/images with canonical names
+- assemble-md: build a single Markdown file from blocks JSON
+- move source PDF to /data/newdata/processed
 """
 from __future__ import annotations
 
@@ -11,6 +14,9 @@ import argparse
 import os
 import sys
 from pathlib import Path
+import hashlib
+import shutil
+import subprocess
 
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp"}
@@ -51,25 +57,75 @@ def main() -> int:
     if not root.exists():
         print(f"[ingest] root not found: {root}", file=sys.stderr)
         return 1
-    files = [p for p in root.rglob("*") if p.is_file()]
+    files = [p for p in root.rglob("*.pdf") if p.is_file()]
     if not files:
-        print("[ingest] No files to process.")
+        print("[ingest] No PDF files to process.")
         return 0
-    counts = {"image": 0, "pdf": 0, "text": 0, "unknown": 0}
-    for f in files:
-        kind = classify(f)
-        counts[kind] = counts.get(kind, 0) + 1
-        print(f"[ingest] {kind:7s} :: {f}")
-    print("[ingest] Summary:")
-    for k, v in counts.items():
-        print(f"  {k:7s}: {v}")
-    if args.dry_run:
-        print("[ingest] Dry run complete.")
-        return 0
-    print("[ingest] This is a scaffold. Worker dispatch not implemented yet.")
+    processed_dir = root / "processed"
+    processed_dir.mkdir(parents=True, exist_ok=True)
+
+    for pdf in sorted(files):
+        # Compute sha for stable ocr dir and naming
+        h = hashlib.sha256()
+        with open(pdf, "rb") as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                h.update(chunk)
+        sha = h.hexdigest()
+        ocr_root = Path(args.ocr_dir) / sha
+        pages_dir = ocr_root / "pages"
+        done_marker = ocr_root / "done.marker"
+
+        if done_marker.exists():
+            print(f"[ingest] Skip already processed {pdf} ({sha})")
+            continue
+
+        print(f"[ingest] Processing {pdf} → sha={sha}")
+        # 1) pdf-to-pages
+        cmd = [
+            "pdf-to-pages",
+            str(pdf),
+            "--outdir",
+            args.ocr_dir,
+            "--subdir",
+            sha,
+            "--dpi",
+            "300",
+        ]
+        if args.dry_run:
+            cmd.append("--dry-run")
+        subprocess.run(cmd, check=True)
+
+        if not args.dry_run:
+            # 2) move-images
+            subprocess.run([
+                "move-images",
+                "--pages-dir",
+                str(pages_dir),
+                "--images-dir",
+                args.images_dir,
+                "--source",
+                str(pdf),
+            ], check=True)
+
+            # 3) assemble-md
+            subprocess.run([
+                "assemble-md",
+                "--ocr-root",
+                str(ocr_root),
+                "--images-dir",
+                args.images_dir,
+            ], check=True)
+
+            # 4) mark done and move source
+            done_marker.write_text("ok", encoding="utf-8")
+            if args.move_processed:
+                dest = processed_dir / pdf.name
+                shutil.move(str(pdf), str(dest))
+                print(f"[ingest] moved source -> {dest}")
+
+    print("[ingest] Done.")
     return 0
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

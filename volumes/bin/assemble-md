@@ -1,0 +1,56 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import json
+import os
+from pathlib import Path
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description="Assemble per-page block JSON into a single Markdown file")
+    ap.add_argument("--ocr-root", required=True, help="OCR root containing meta.json and pages/*.blocks.json")
+    ap.add_argument("--out", help="Output Markdown file (default: /data/images/<prefix>-ocr.md)")
+    ap.add_argument("--images-dir", default=os.environ.get("IMAGES_DIR", "/data/images"))
+    ap.add_argument("--dry-run", action="store_true")
+    args = ap.parse_args()
+
+    root = Path(args.ocr_root)
+    meta = json.loads((root / "meta.json").read_text(encoding="utf-8"))
+    # Use moved_images.json if present to derive prefix
+    prefix = None
+    moved = root / "moved_images.json"
+    if moved.exists():
+        m = json.loads(moved.read_text(encoding="utf-8"))
+        prefix = m.get("prefix")
+    if not prefix:
+        prefix = "note"
+
+    out_path = Path(args.out) if args.out else Path(args.images_dir) / f"{prefix}-ocr.md"
+    lines: list[str] = []
+    lines.append(f"# OCR for {meta.get('source', '')}\n")
+    for p in sorted(meta.get("pages", []), key=lambda x: x["page"]):
+        blocks_path = Path(p["blocks_json"])
+        jp = json.loads(blocks_path.read_text(encoding="utf-8"))
+        lines.append(f"\n## Page {jp['page']}\n")
+        for blk in jp.get("blocks", []):
+            text = blk.get("content", "").strip()
+            if not text:
+                continue
+            # Simple paragraph with a blank line between
+            lines.append(text)
+            lines.append("")
+
+    content = "\n".join(lines) + "\n"
+    if args.dry_run:
+        print(f"[assemble-md] would write {out_path}")
+    else:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(content, encoding="utf-8")
+        print(f"[assemble-md] wrote {out_path}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+
