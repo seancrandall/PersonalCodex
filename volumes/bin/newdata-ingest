@@ -104,13 +104,9 @@ def main() -> int:
             print(f"[ingest] Skip already processed {pdf} ({sha})")
             continue
 
-        # Skip pure image PDFs for now (OCR not yet implemented)
-        if not has_text_layer(pdf):
-            print(f"[ingest] No embedded text in {pdf}; skipping until OCR is enabled.")
-            continue
-
+        has_text = has_text_layer(pdf)
         print(f"[ingest] Processing {pdf} → sha={sha}")
-        # 1) pdf-to-pages
+        # 1) pdf-to-pages (always render pages)
         cmd = [
             "pdf-to-pages",
             str(pdf),
@@ -126,17 +122,26 @@ def main() -> int:
         subprocess.run(cmd, check=True)
 
         if not args.dry_run:
-            # Load meta and decide if text was extracted
-            meta_path = ocr_root / "meta.json"
-            try:
-                meta = json.loads(meta_path.read_text(encoding="utf-8"))
-            except Exception as e:
-                print(f"[ingest] Failed reading meta for {pdf}: {e}")
-                continue
+            success = False
+            if has_text:
+                # Load meta and decide if text was extracted
+                meta_path = ocr_root / "meta.json"
+                try:
+                    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                    total_blocks = int(meta.get("total_blocks", 0))
+                    success = total_blocks > 0
+                except Exception as e:
+                    print(f"[ingest] Failed reading meta for {pdf}: {e}")
+                    success = False
+            else:
+                # Run OCR over rendered pages
+                subprocess.run(["ocr-image", str(pages_dir)], check=True)
+                # Consider success if any OCR JSON exists
+                ocr_jsons = list(pages_dir.glob("*.ocr.json"))
+                success = len(ocr_jsons) > 0
 
-            total_blocks = int(meta.get("total_blocks", 0))
-            if total_blocks <= 0:
-                print(f"[ingest] No text detected in {pdf}; leaving source in place. (OCR not yet enabled)")
+            if not success:
+                print(f"[ingest] No text detected for {pdf}; leaving source in place.")
                 continue
 
             # 2) move-images

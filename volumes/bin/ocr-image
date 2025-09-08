@@ -2,25 +2,141 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
+import subprocess
+from pathlib import Path
+from typing import List, Dict, Any
+
+
+def run_tesseract_tsv(img: Path, lang: str, psm: int, oem: int) -> str:
+    cmd = [
+        "tesseract",
+        str(img),
+        "stdout",
+        "-l",
+        lang,
+        "--oem",
+        str(oem),
+        "--psm",
+        str(psm),
+        "tsv",
+    ]
+    res = subprocess.run(cmd, check=True, capture_output=True)
+    return res.stdout.decode("utf-8", errors="ignore")
+
+
+def parse_tsv_to_blocks(tsv: str) -> List[Dict[str, Any]]:
+    import csv
+    from io import StringIO
+
+    reader = csv.DictReader(StringIO(tsv), delimiter="\t")
+    lines: Dict[str, Dict[str, Any]] = {}
+    for row in reader:
+        level = row.get("level")
+        if not level:
+            continue
+        # We aggregate at line level (level==4)
+        if row.get("level") not in {"4", "5"}:  # line or word
+            continue
+        line_key = (row.get("page_num", "1"), row.get("block_num", "0"), row.get("par_num", "0"), row.get("line_num", "0"))
+        key = ":".join(line_key)
+        try:
+            left = int(row.get("left", "0"))
+            top = int(row.get("top", "0"))
+            width = int(row.get("width", "0"))
+            height = int(row.get("height", "0"))
+            conf = float(row.get("conf", "-1"))
+        except Exception:
+            left = top = width = height = 0
+            conf = -1.0
+        text = row.get("text", "").strip()
+
+        if key not in lines:
+            lines[key] = {
+                "bbox": [left, top, left + width, top + height],
+                "content": text if row.get("level") == "5" else "",
+                "conf_sum": max(conf, 0.0),
+                "conf_n": 1 if conf >= 0 else 0,
+            }
+        else:
+            # expand bbox
+            l = lines[key]
+            l["bbox"][0] = min(l["bbox"][0], left)
+            l["bbox"][1] = min(l["bbox"][1], top)
+            l["bbox"][2] = max(l["bbox"][2], left + width)
+            l["bbox"][3] = max(l["bbox"][3], top + height)
+            if row.get("level") == "5" and text:
+                l["content"] = (l["content"] + (" " if l["content"] else "") + text).strip()
+            if conf >= 0:
+                l["conf_sum"] += conf
+                l["conf_n"] += 1
+
+    blocks: List[Dict[str, Any]] = []
+    # Sort by y then x
+    def sort_key(item):
+        b = item[1]
+        return (b["bbox"][1], b["bbox"][0])
+
+    for _, b in sorted(lines.items(), key=sort_key):
+        content = b.get("content", "").strip()
+        if not content:
+            continue
+        n = max(int(b.get("conf_n", 0)), 1)
+        avg = float(b.get("conf_sum", 0.0)) / n
+        blocks.append({
+            "bbox": b["bbox"],
+            "content": content,
+            "block_type": "line",
+            "confidence": avg,
+        })
+    return blocks
+
+
+def process_path(path: Path, lang: str, psm: int, oem: int) -> int:
+    images: List[Path] = []
+    if path.is_dir():
+        images = sorted([p for p in path.iterdir() if p.suffix.lower() in {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp"}])
+    else:
+        images = [path]
+    count = 0
+    for img in images:
+        try:
+            tsv = run_tesseract_tsv(img, lang=lang, psm=psm, oem=oem)
+        except subprocess.CalledProcessError as e:
+            print(f"[ocr-image] tesseract failed on {img}: {e}")
+            continue
+        blocks = parse_tsv_to_blocks(tsv)
+        # Write JSON and TXT next to image
+        json_path = img.with_suffix(".ocr.json")
+        txt_path = img.with_suffix(".txt")
+        txt = "\n".join([b["content"] for b in blocks]) + "\n"
+        json_path.write_text(json.dumps({"page": None, "blocks": blocks}, ensure_ascii=False, indent=2), encoding="utf-8")
+        txt_path.write_text(txt, encoding="utf-8")
+        print(f"[ocr-image] wrote {json_path.name} and {txt_path.name}")
+        count += 1
+    return count
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="OCR an image or directory of images (scaffold)")
-    ap.add_argument("input", help="Image path or directory")
-    ap.add_argument("--outdir", default=os.environ.get("OCR_DIR", "/data/ocr"))
-    ap.add_argument("--engine", default=os.environ.get("OCR_ENGINE", "tesseract"), choices=["tesseract", "paddle"])
+    ap = argparse.ArgumentParser(description="OCR an image or directory of images using Tesseract")
+    ap.add_argument("input", help="Image path or directory containing images")
+    ap.add_argument("--engine", default=os.environ.get("OCR_ENGINE", "tesseract"), choices=["tesseract"])  # placeholder for paddle
     ap.add_argument("--langs", default=os.environ.get("OCR_LANGS", "eng"))
+    ap.add_argument("--psm", type=int, default=int(os.environ.get("TESSERACT_PSM", "3")))
+    ap.add_argument("--oem", type=int, default=int(os.environ.get("TESSERACT_OEM", "1")))
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
-    print(f"[ocr-image] input={args.input} outdir={args.outdir} engine={args.engine} langs={args.langs}")
+    if args.engine != "tesseract":
+        print(f"[ocr-image] engine {args.engine} not implemented yet")
+        return 2
+    path = Path(args.input)
+    print(f"[ocr-image] input={path} engine={args.engine} langs={args.langs} psm={args.psm} oem={args.oem}")
     if args.dry_run:
         print("[ocr-image] Dry run; not invoking OCR.")
         return 0
-    print("[ocr-image] Scaffold only; integrate Tesseract/PaddleOCR next.")
-    return 0
+    return 0 if process_path(path, args.langs, args.psm, args.oem) >= 0 else 1
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

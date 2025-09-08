@@ -26,7 +26,9 @@ services:
       - "8000:8000"
 
   ingest:
-    image: python:3.11
+    build:
+      context: ./infra/ingest
+      dockerfile: Dockerfile
     gpus: all
     env_file:
       - .env
