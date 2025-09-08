@@ -26,10 +26,7 @@ services:
       - "8000:8000"
 
   ingest:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-      network: host
+    image: python:3.11
     gpus: all
     env_file:
       - .env

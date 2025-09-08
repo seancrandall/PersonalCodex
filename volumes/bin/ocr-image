@@ -93,7 +93,7 @@ def parse_tsv_to_blocks(tsv: str) -> List[Dict[str, Any]]:
     return blocks
 
 
-def process_path(path: Path, lang: str, psm: int, oem: int) -> int:
+def process_path_with_tesseract(path: Path, lang: str, psm: int, oem: int) -> int:
     images: List[Path] = []
     if path.is_dir():
         images = sorted([p for p in path.iterdir() if p.suffix.lower() in {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp"}])
@@ -118,24 +118,75 @@ def process_path(path: Path, lang: str, psm: int, oem: int) -> int:
     return count
 
 
+def process_path_with_paddle(path: Path, lang: str) -> int:
+    try:
+        from paddleocr import PaddleOCR  # type: ignore
+    except Exception:
+        subprocess.check_call(["python", "-m", "pip", "install", "--quiet", "paddleocr==2.7.0.3", "paddlepaddle==2.6.1"])
+        from paddleocr import PaddleOCR  # type: ignore
+
+    ocr = PaddleOCR(use_angle_cls=True, lang="en" if lang.startswith("en") else "en", show_log=False)  # basic EN; extend later
+    images: List[Path] = []
+    if path.is_dir():
+        images = sorted([p for p in path.iterdir() if p.suffix.lower() in {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp"}])
+    else:
+        images = [path]
+    count = 0
+    for img in images:
+        try:
+            result = ocr.ocr(str(img), cls=True)
+        except Exception as e:
+            print(f"[ocr-image] paddleocr failed on {img}: {e}")
+            continue
+        blocks: List[Dict[str, Any]] = []
+        # result is list for batch; we passed single path so result[0] is lines
+        for line in (result[0] or []):
+            box, (text, conf) = line
+            xs = [pt[0] for pt in box]
+            ys = [pt[1] for pt in box]
+            bbox = [min(xs), min(ys), max(xs), max(ys)]
+            blocks.append({
+                "bbox": bbox,
+                "content": (text or "").strip(),
+                "block_type": "line",
+                "confidence": float(conf) if conf is not None else None,
+            })
+        json_path = img.with_suffix(".ocr.json")
+        txt_path = img.with_suffix(".txt")
+        txt = "\n".join([b["content"] for b in blocks if b.get("content")]) + "\n"
+        json_path.write_text(json.dumps({"page": None, "blocks": blocks}, ensure_ascii=False, indent=2), encoding="utf-8")
+        txt_path.write_text(txt, encoding="utf-8")
+        print(f"[ocr-image] wrote {json_path.name} and {txt_path.name} (paddle)")
+        count += 1
+    return count
+
+
 def main() -> int:
-    ap = argparse.ArgumentParser(description="OCR an image or directory of images using Tesseract")
+    ap = argparse.ArgumentParser(description="OCR an image or directory of images (tesseract → paddle fallback)")
     ap.add_argument("input", help="Image path or directory containing images")
-    ap.add_argument("--engine", default=os.environ.get("OCR_ENGINE", "tesseract"), choices=["tesseract"])  # placeholder for paddle
+    ap.add_argument("--engine", default=os.environ.get("OCR_ENGINE", "auto"), choices=["auto", "tesseract", "paddle"])  # auto tries tesseract then paddle
     ap.add_argument("--langs", default=os.environ.get("OCR_LANGS", "eng"))
     ap.add_argument("--psm", type=int, default=int(os.environ.get("TESSERACT_PSM", "3")))
     ap.add_argument("--oem", type=int, default=int(os.environ.get("TESSERACT_OEM", "1")))
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
-    if args.engine != "tesseract":
-        print(f"[ocr-image] engine {args.engine} not implemented yet")
-        return 2
     path = Path(args.input)
     print(f"[ocr-image] input={path} engine={args.engine} langs={args.langs} psm={args.psm} oem={args.oem}")
     if args.dry_run:
         print("[ocr-image] Dry run; not invoking OCR.")
         return 0
-    return 0 if process_path(path, args.langs, args.psm, args.oem) >= 0 else 1
+    if args.engine in ("auto", "tesseract"):
+        try:
+            return 0 if process_path_with_tesseract(path, args.langs, args.psm, args.oem) >= 0 else 1
+        except FileNotFoundError:
+            print("[ocr-image] tesseract not found; falling back to paddleocr")
+        except Exception as e:
+            print(f"[ocr-image] tesseract error: {e}; falling back to paddleocr")
+            # continue to paddle
+        if args.engine == "tesseract":
+            return 2
+    # paddle path
+    return 0 if process_path_with_paddle(path, args.langs) >= 0 else 1
 
 
 if __name__ == "__main__":

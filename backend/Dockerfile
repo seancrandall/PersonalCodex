@@ -24,8 +24,7 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install -y --no-install-recommends \
   ca-certificates curl wget git git-lfs vim nano build-essential pkg-config \
-  software-properties-common unzip python3 python3-pip python3-venv python3-dev tini \
-  tesseract-ocr tesseract-ocr-eng
+  software-properties-common unzip python3 python3-pip python3-venv python3-dev tini
 update-ca-certificates
 
 # Restore lists and clean
