@@ -17,6 +17,7 @@ from pathlib import Path
 import hashlib
 import shutil
 import subprocess
+import json
 
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp"}
