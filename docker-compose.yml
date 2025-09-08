@@ -26,7 +26,7 @@ services:
       - "8000:8000"
 
   ingest:
-    image: python:3.11
+    image: jbarlow/ocrmypdf:latest
     gpus: all
     env_file:
       - .env
