@@ -42,7 +42,8 @@ services:
     volumes:
       - ./volumes:/data
     working_dir: /
-    command: ["newdata-ingest"]
+    entrypoint: ["/bin/sh", "-lc"]
+    command: "newdata-ingest"
     restart: "no"
 
   web:
