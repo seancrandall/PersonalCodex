@@ -121,32 +121,9 @@ def process_path_with_tesseract(path: Path, lang: str, psm: int, oem: int) -> in
 def process_path_with_paddle(path: Path, lang: str) -> int:
     try:
         from paddleocr import PaddleOCR  # type: ignore
-    except Exception:
-        try:
-            subprocess.check_call([
-                "python",
-                "-m",
-                "pip",
-                "install",
-                "--quiet",
-                # Attempt to install binary wheels
-                "--only-binary",
-                ":all:",
-                "paddleocr==2.7.0.3",
-                "paddlepaddle==2.6.1",
-            ])
-        except subprocess.CalledProcessError:
-            # Retry without only-binary; may need to fetch from default indexes
-            subprocess.check_call([
-                "python",
-                "-m",
-                "pip",
-                "install",
-                "--quiet",
-                "paddleocr==2.7.0.3",
-                "paddlepaddle==2.6.1",
-            ])
-        from paddleocr import PaddleOCR  # type: ignore
+    except Exception as e:
+        print(f"[ocr-image] paddleocr not available ({e}); skipping OCR.")
+        return 0
 
     ocr = PaddleOCR(use_angle_cls=True, lang="en" if lang.startswith("en") else "en", show_log=False)  # basic EN; extend later
     images: List[Path] = []
@@ -202,14 +179,18 @@ def main() -> int:
         try:
             return 0 if process_path_with_tesseract(path, args.langs, args.psm, args.oem) >= 0 else 1
         except FileNotFoundError:
-            print("[ocr-image] tesseract not found; falling back to paddleocr")
+            print("[ocr-image] tesseract not found")
         except Exception as e:
-            print(f"[ocr-image] tesseract error: {e}; falling back to paddleocr")
-            # continue to paddle
+            print(f"[ocr-image] tesseract error: {e}")
+        # If explicit tesseract, stop here
         if args.engine == "tesseract":
             return 2
-    # paddle path
-    return 0 if process_path_with_paddle(path, args.langs) >= 0 else 1
+    # paddle path (only if requested explicitly)
+    if args.engine == "paddle":
+        return 0 if process_path_with_paddle(path, args.langs) >= 0 else 1
+    # engine=auto but no tesseract available, and we are avoiding heavy installs: skip gracefully
+    print("[ocr-image] no OCR engine available in this environment; skipping.")
+    return 0
 
 
 if __name__ == "__main__":
