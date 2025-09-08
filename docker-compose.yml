@@ -27,7 +27,7 @@ services:
 
   ingest:
     build:
-      context: ./infra/ingest
+      context: ./backend
       dockerfile: Dockerfile
       network: host
     gpus: all
