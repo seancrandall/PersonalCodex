@@ -1,0 +1,14 @@
+# CPU override: disable GPU requests for all services.
+# Usage: docker compose -f docker-compose.yml -f docker-compose.cpu.yml up -d
+
+services:
+  api:
+    gpus: null
+    environment:
+      - CUDA_VISIBLE_DEVICES=
+
+  ingest:
+    gpus: null
+    environment:
+      - CUDA_VISIBLE_DEVICES=
+

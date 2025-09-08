@@ -6,7 +6,8 @@ A self-hosted, containerized infrastructure for creating searchable scripture st
 - Start the stack (CPU): `docker compose up --build`
   - API: `http://localhost:8000` (docs at `/docs`)
   - Web: `http://localhost:3000`
-- With GPU: `docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build`
+- GPU default: `docker compose up --build` (requests GPU if available)
+- CPU override: `docker compose -f docker-compose.yml -f docker-compose.cpu.yml up --build`
 - Data and models live under `./volumes` on host, mounted at `/data` in containers.
 
 ## Project Goals & Scope
