@@ -18,6 +18,7 @@ import hashlib
 import shutil
 import subprocess
 import json
+import os
 
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp"}
@@ -66,6 +67,28 @@ def main() -> int:
     processed_dir = root / "processed"
     processed_dir.mkdir(parents=True, exist_ok=True)
 
+    # Optionally check for embedded text before processing
+    def has_text_layer(path: Path) -> bool:
+        try:
+            import fitz  # type: ignore
+        except Exception:
+            # install PyMuPDF to check quickly
+            subprocess.run([sys.executable, "-m", "pip", "install", "--quiet", "PyMuPDF>=1.23.7"], check=True)
+            import fitz  # type: ignore  # noqa: F401
+        try:
+            doc = fitz.open(path)
+        except Exception:
+            return False
+        min_chars = int(os.environ.get("PDF_TEXT_MIN_CHARS", "40"))
+        found = False
+        for i in range(min(5, doc.page_count)):
+            t = doc.load_page(i).get_text("text") or ""
+            if len(t.strip()) >= min_chars:
+                found = True
+                break
+        doc.close()
+        return found
+
     for pdf in sorted(files):
         # Compute sha for stable ocr dir and naming
         h = hashlib.sha256()
@@ -79,6 +102,11 @@ def main() -> int:
 
         if done_marker.exists():
             print(f"[ingest] Skip already processed {pdf} ({sha})")
+            continue
+
+        # Skip pure image PDFs for now (OCR not yet implemented)
+        if not has_text_layer(pdf):
+            print(f"[ingest] No embedded text in {pdf}; skipping until OCR is enabled.")
             continue
 
         print(f"[ingest] Processing {pdf} → sha={sha}")

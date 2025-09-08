@@ -178,6 +178,27 @@ def _extract_blocks_heuristic(page) -> List[Dict[str, Any]]:  # type: ignore
     return blocks
 
 
+def _fallback_blocks_simple(page) -> List[Dict[str, Any]]:  # type: ignore
+    # Simple fallback: use PyMuPDF 'blocks' and treat each as a paragraph
+    out: List[Dict[str, Any]] = []
+    for blk in page.get_text("blocks") or []:
+        if len(blk) < 5:
+            continue
+        x0, y0, x1, y1, txt = blk[:5]
+        text = (txt or "").strip()
+        if not text:
+            continue
+        out.append({
+            "bbox": [x0, y0, x1, y1],
+            "content": text,
+            "block_type": "paragraph",
+            "confidence": None,
+        })
+    # Sort by reading order
+    out.sort(key=lambda b: (round(b["bbox"][1], 2), round(b["bbox"][0], 2)))
+    return out
+
+
 def render_and_extract(pdf_path: Path, out_root: Path, dpi: int, pages: Iterable[int], mode: str) -> dict:
     import fitz  # type: ignore
 
@@ -202,8 +223,10 @@ def render_and_extract(pdf_path: Path, out_root: Path, dpi: int, pages: Iterable
         png_path = out_pages / f"page-{pno:04d}.png"
         pix.save(png_path)
 
-        # Extract blocks (paragraph-like) via heuristics
+        # Extract blocks (paragraph-like) via heuristics; fallback to simple blocks if empty
         norm_blocks = _extract_blocks_heuristic(page)
+        if not norm_blocks:
+            norm_blocks = _fallback_blocks_simple(page)
         json_path = out_pages / f"page-{pno:04d}.blocks.json"
         with open(json_path, "w", encoding="utf-8") as f:
             json.dump({"page": pno, "blocks": norm_blocks}, f, ensure_ascii=False, indent=2)
