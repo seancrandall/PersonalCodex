@@ -12,9 +12,13 @@ services:
       - CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-all}
       - TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST:-}
       - FORCE_CUDA=1
+    build:
+      network: host
 
   ingest:
     gpus: all
     environment:
       - CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-all}
       - FORCE_CUDA=1
+    build:
+      network: host
