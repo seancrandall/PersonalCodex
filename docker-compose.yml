@@ -37,6 +37,8 @@ services:
       - PATH=/opt/conda/bin:/data/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
       - MOVE_PROCESSED=1
       - OCR_ENGINE=${OCR_ENGINE:-trocr}
+      - TROCR_MODEL_ID=${TROCR_MODEL_ID:-microsoft/trocr-large-handwritten}
+      - HF_HOME=/data/models
       - CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-all}
       - NEWDATA_DIR=/data/newdata
       - IMAGES_DIR=/data/images

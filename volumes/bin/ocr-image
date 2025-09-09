@@ -245,16 +245,20 @@ def process_path_with_trocr(path: Path, model_id: str | None = None, device: str
         print(f"[ocr-image] trocr prerequisites missing ({e}); skipping trocr.")
         return 0
 
-    model_id = model_id or _os.environ.get("TROCR_MODEL_ID", "microsoft/trocr-base-handwritten")
+    model_id = model_id or _os.environ.get("TROCR_MODEL_ID", "microsoft/trocr-large-handwritten")
     # Try to load from local cache first if HF_HOME provided
     local_only = False
     models_dir = _os.environ.get("HF_HOME") or _os.environ.get("MODELS_DIR")
     local_path = None
     if models_dir:
-        candidate = Path(models_dir) / model_id.replace("/", "__")
-        if candidate.exists():
+        nested = Path(models_dir) / model_id  # e.g., /data/models/microsoft/trocr-large-handwritten
+        flat = Path(models_dir) / model_id.replace("/", "__")
+        if nested.exists():
             local_only = True
-            local_path = str(candidate)
+            local_path = str(nested)
+        elif flat.exists():
+            local_only = True
+            local_path = str(flat)
 
     try:
         processor = TrOCRProcessor.from_pretrained(local_path or model_id, local_files_only=local_only)
