@@ -502,6 +502,7 @@ def process_path_with_openai(path: Path) -> int:
     count = 0
     model = os.environ.get("OPENAI_OCR_MODEL", "gpt-4o-mini")
     fb_model = os.environ.get("OPENAI_OCR_FALLBACK_MODEL", "gpt-4o-mini")
+    print(f"[ocr-image] OpenAI OCR model={model} fallback={fb_model}")
     delay_s = float(os.environ.get("OPENAI_OCR_DELAY_S", "0.0"))
     for img in images:
         try:
