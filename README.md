@@ -70,6 +70,12 @@ Linked pages and migration
     - By ids: `python scripts/mark_files_processed.py --db volumes/notesdb/notes.db --ids 1 2 3`
     - Unset flag: add `--unset`
 
+Write OCR results to notes.db
+- CLI: `volumes/bin/notesdb-write`
+  - From manifest (PDF batch): `volumes/bin/notesdb-write --db volumes/notesdb/notes.db --manifest /data/ocr/<sha>/moved_images.json --images-dir /data/images`
+  - From image paths: `volumes/bin/notesdb-write --db volumes/notesdb/notes.db --paths /data/images/scan-abc.png --original-name original.png`
+- Make: `make notesdb-write MANIFEST=volumes/ocr/<sha>/moved_images.json` or `make notesdb-write PATHS="volumes/images/a.png volumes/images/b.png" ORIGINAL=original.png`
+
 Manual build (without Make)
 - `sqlite3 volumes/notesdb/notes.db < src/notesdb/schema.sql`
 - Then you can run `python scripts/validate_notes_passages.py --notes-db volumes/notesdb/notes.db --std-db volumes/scripdb/standardworks.db [--fill-citations]`.

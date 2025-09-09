@@ -4,6 +4,7 @@ DB ?= volumes/scripdb/standardworks.db
 ROOT ?= src/scripturedb/scriptures
 NOTES_DB ?= volumes/notesdb/notes.db
 NOTES_SCHEMA ?= src/notesdb/schema.sql
+IMAGES_DIR ?= volumes/images
 
 .PHONY: init-db seed import normalize summary check pipeline clean-db
 
@@ -59,6 +60,12 @@ mark-processed-ocr:
 
 validate-notesdb:
 	python scripts/validate_notes_passages.py --notes-db $(NOTES_DB) --std-db $(DB)
+
+## Write OCR outputs into notes.db using manifest or paths
+.PHONY: notesdb-write
+notesdb-write:
+	@test -n "$(MANIFEST)$(PATHS)" || (echo "Set MANIFEST=/path/to/moved_images.json or PATHS='img1 img2' [ORIGINAL=name]" && exit 1)
+	volumes/bin/notesdb-write --db $(NOTES_DB) $(if $(MANIFEST),--manifest $(MANIFEST),) $(if $(PATHS),--paths $(PATHS),) --images-dir $(IMAGES_DIR) $(if $(ORIGINAL),--original-name $(ORIGINAL),)
 
 fill-citations:
 	python scripts/validate_notes_passages.py --notes-db $(NOTES_DB) --std-db $(DB) --fill-citations
