@@ -171,6 +171,14 @@ def main() -> int:
                     args.notes_db,
                     "--only-missing",
                 ], check=True)
+                # Link scripture passages
+                subprocess.run([
+                    "notesdb-passages",
+                    "--notes-db",
+                    args.notes_db,
+                    "--std-db",
+                    os.environ.get("STANDARD_WORKS_DB", "/data/scripdb/standardworks.db")
+                ], check=True)
 
             # 5) mark done and move source
             done_marker.write_text("ok", encoding="utf-8")
@@ -222,6 +230,13 @@ def main() -> int:
                         "--db",
                         args.notes_db,
                         "--only-missing",
+                    ], check=True)
+                    subprocess.run([
+                        "notesdb-passages",
+                        "--notes-db",
+                        args.notes_db,
+                        "--std-db",
+                        os.environ.get("STANDARD_WORKS_DB", "/data/scripdb/standardworks.db")
                     ], check=True)
         # Optionally mark/move processed originals
         if args.move_processed and not args.dry_run:

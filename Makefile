@@ -77,6 +77,11 @@ notesdb-assemble:
 notesdb-dates:
 	volumes/bin/notesdb-dates --db $(NOTES_DB) $(if $(NOTE_ID),--note-id $(NOTE_ID),) $(if $(ONLY_MISSING),--only-missing,) $(if $(LOOKBACK),--lookback $(LOOKBACK),)
 
+## Scan notes for scripture refs and link passages
+.PHONY: notesdb-passages
+notesdb-passages:
+	volumes/bin/notesdb-passages --notes-db $(NOTES_DB) --std-db $(DB) $(if $(NOTE_ID),--note-id $(NOTE_ID),)
+
 fill-citations:
 	python scripts/validate_notes_passages.py --notes-db $(NOTES_DB) --std-db $(DB) --fill-citations
 

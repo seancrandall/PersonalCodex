@@ -1,0 +1,250 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import sqlite3
+from contextlib import closing
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Tuple
+
+
+RANGE_SEP = r"[-–—]{1,2}"  # hyphen, en-dash, em-dash, double hyphen
+
+
+def load_aliases(path: str) -> Dict[str, Tuple[str, str]]:
+    with open(path, "r", encoding="utf-8") as f:
+        cfg = json.load(f)
+    rev: Dict[str, Tuple[str, str]] = {}
+    for key, aliases in cfg.get("aliases", {}).items():
+        # key is "volume:book"
+        vol, book = key.split(":", 1)
+        vol = vol.strip()
+        book = book.strip()
+        for a in aliases:
+            norm = normalize_alias(a)
+            rev[norm] = (vol, book)
+    return rev
+
+
+def normalize_alias(s: str) -> str:
+    # Lowercase, replace symbols with spaces, collapse spaces
+    s = s.lower()
+    s = s.replace("&", " and ").replace("+", " and ")
+    s = re.sub(r"[\.·—–\-_/]+", " ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
+def compile_ref_regex() -> re.Pattern:
+    # book (text) + chapter + optional verses list
+    # We capture the raw book token and normalize it later against alias map.
+    book = r"(?P<book>[A-Za-z0-9&+\.\-\s]{2,40}?)"
+    chap = r"\s*(?P<chap>\d{1,3})"
+    verses = (
+        r"(?::\s*(?P<verses>\d{1,3}(?:\s*" + RANGE_SEP + r"\s*\d{1,3})?(?:\s*,\s*\d{1,3}(?:\s*"
+        + RANGE_SEP
+        + r"\s*\d{1,3})?)*))?"
+    )
+    # Word boundary before, and ensure next char after match isn't a letter (to reduce false positives)
+    pattern = r"\b" + book + chap + verses + r"(?![A-Za-z])"
+    return re.compile(pattern)
+
+
+def parse_verses_list(vs: Optional[str]) -> List[Tuple[int, int]]:
+    if not vs:
+        return []
+    out: List[Tuple[int, int]] = []
+    for part in re.split(r"\s*,\s*", vs.strip()):
+        if not part:
+            continue
+        m = re.match(rf"^(\d{{1,3}})\s*(?:{RANGE_SEP})\s*(\d{{1,3}})$", part)
+        if m:
+            a = int(m.group(1))
+            b = int(m.group(2))
+            if a <= b:
+                out.append((a, b))
+            else:
+                out.append((b, a))
+        else:
+            try:
+                v = int(part)
+                out.append((v, v))
+            except ValueError:
+                continue
+    return out
+
+
+@dataclass
+class BookKey:
+    volume: str
+    book: str
+
+
+def resolve_book(std: sqlite3.Connection, key: BookKey) -> Tuple[int, int]:
+    # Returns (volume_id, book_id)
+    cur = std.execute("SELECT id FROM volume WHERE VolumeName = ?", (key.volume,))
+    vrow = cur.fetchone()
+    if not vrow:
+        raise RuntimeError(f"Volume not found: {key.volume}")
+    vol_id = int(vrow[0])
+    cur = std.execute("SELECT id FROM book WHERE fkVolume = ? AND BookName = ?", (vol_id, key.book))
+    brow = cur.fetchone()
+    if not brow:
+        # Fallback: try ShortTitle
+        cur = std.execute("SELECT id FROM book WHERE fkVolume = ? AND ShortTitle = ?", (vol_id, key.book))
+        brow = cur.fetchone()
+    if not brow:
+        raise RuntimeError(f"Book not found: {key.volume}:{key.book}")
+    return vol_id, int(brow[0])
+
+
+def chapter_bounds(std: sqlite3.Connection, book_id: int, chap_num: str) -> Tuple[int, int]:
+    # Returns (chapter_id, max_verse_number)
+    cur = std.execute(
+        "SELECT id FROM chapter WHERE fkBook = ? AND ChapterNumber = ?",
+        (book_id, str(chap_num)),
+    )
+    crow = cur.fetchone()
+    if not crow:
+        raise RuntimeError(f"Chapter not found: book={book_id} chap={chap_num}")
+    chap_id = int(crow[0])
+    cur = std.execute(
+        "SELECT MAX(VerseNumber) FROM verse WHERE fkChapter = ?",
+        (chap_id,),
+    )
+    vmax = int(cur.fetchone()[0] or 0)
+    return chap_id, vmax
+
+
+def verse_id(std: sqlite3.Connection, chap_id: int, verse_num: int) -> int:
+    cur = std.execute(
+        "SELECT id FROM verse WHERE fkChapter = ? AND VerseNumber = ?",
+        (chap_id, int(verse_num)),
+    )
+    vrow = cur.fetchone()
+    if not vrow:
+        raise RuntimeError(f"Verse not found: chap={chap_id} v={verse_num}")
+    return int(vrow[0])
+
+
+def upsert_passage(notes: sqlite3.Connection, start_id: int, end_id: int, citation: str) -> int:
+    notes.execute(
+        """
+        INSERT INTO passage(start_verse_id, end_verse_id, citation)
+        VALUES (?, ?, ?)
+        ON CONFLICT(start_verse_id, end_verse_id) DO NOTHING
+        """,
+        (start_id, end_id, citation),
+    )
+    cur = notes.execute(
+        "SELECT id FROM passage WHERE start_verse_id = ? AND end_verse_id = ?",
+        (start_id, end_id),
+    )
+    return int(cur.fetchone()[0])
+
+
+def link_note_passage(notes: sqlite3.Connection, note_id: int, passage_id: int) -> None:
+    notes.execute(
+        "INSERT OR IGNORE INTO note_passage(note_id, passage_id, relation) VALUES (?, ?, 'mentions')",
+        (note_id, passage_id),
+    )
+
+
+def make_citation(book_disp: str, chap: int, vranges: List[Tuple[int, int]]) -> str:
+    parts: List[str] = []
+    for a, b in vranges:
+        if a == b:
+            parts.append(str(a))
+        else:
+            parts.append(f"{a}–{b}")
+    verses = ", ".join(parts)
+    return f"{book_disp} {chap}:{verses}" if verses else f"{book_disp} {chap}"
+
+
+def process_note(note_id: int, text: str, notes: sqlite3.Connection, std: sqlite3.Connection, alias_map: Dict[str, Tuple[str, str]]) -> Tuple[int, int]:
+    regex = compile_ref_regex()
+    found = 0
+    linked = 0
+    for m in regex.finditer(text or ""):
+        raw_book = (m.group("book") or "").strip()
+        chap = int(m.group("chap"))
+        verses_str = m.group("verses")
+        norm = normalize_alias(raw_book)
+        key = alias_map.get(norm)
+        if not key:
+            continue
+        vol, book = key
+        try:
+            _vol_id, book_id = resolve_book(std, BookKey(vol, book))
+            chap_id, maxv = chapter_bounds(std, book_id, chap)
+        except Exception:
+            continue
+        vranges = parse_verses_list(verses_str)
+        if not vranges:
+            # Whole chapter
+            start = verse_id(std, chap_id, 1)
+            end = verse_id(std, chap_id, maxv)
+            citation = make_citation(book, chap, [])
+            pid = upsert_passage(notes, start, end, citation)
+            link_note_passage(notes, note_id, pid)
+            found += 1
+            linked += 1
+            continue
+        # Per range in same chapter
+        for a, b in vranges:
+            if a < 1 or b < 1 or a > maxv or b > maxv:
+                continue
+            try:
+                start = verse_id(std, chap_id, a)
+                end = verse_id(std, chap_id, b)
+            except Exception:
+                continue
+            citation = make_citation(book, chap, [(a, b)])
+            pid = upsert_passage(notes, start, end, citation)
+            link_note_passage(notes, note_id, pid)
+            found += 1
+            linked += 1
+    return found, linked
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description="Scan notes for scripture references and link passages")
+    ap.add_argument("--notes-db", default=os.environ.get("NOTES_DB", "/data/notesdb/notes.db"))
+    ap.add_argument("--std-db", default=os.environ.get("STANDARD_WORKS_DB", "/data/scripdb/standardworks.db"))
+    ap.add_argument("--aliases", default=os.environ.get("BOOK_ALIASES", "/data/scripdb/book_aliases.json"))
+    ap.add_argument("--note-id", type=int)
+    ap.add_argument("--only-empty", action="store_true", help="Only scan notes without any note_passage rows")
+    ap.add_argument("--dry-run", action="store_true")
+    args = ap.parse_args()
+
+    alias_map = load_aliases(args.aliases)
+    with closing(sqlite3.connect(args.std_db)) as std_conn, closing(sqlite3.connect(args.notes_db)) as notes_conn:
+        notes_conn.execute("PRAGMA foreign_keys=ON")
+        total_found = 0
+        total_linked = 0
+        # Target notes
+        if args.note_id:
+            note_rows = [(args.note_id,)]
+        elif args.only_empty:
+            note_rows = notes_conn.execute(
+                "SELECT n.id FROM note n LEFT JOIN note_passage np ON np.note_id = n.id WHERE np.note_id IS NULL ORDER BY n.id"
+            ).fetchall()
+        else:
+            note_rows = notes_conn.execute("SELECT id FROM note ORDER BY id").fetchall()
+        with notes_conn:
+            for (nid,) in note_rows:
+                trow = notes_conn.execute("SELECT raw_text FROM note WHERE id=?", (nid,)).fetchone()
+                text = trow[0] if trow else ""
+                found, linked = process_note(int(nid), text, notes_conn, std_conn, alias_map)
+                total_found += found
+                total_linked += linked
+        print(f"[notesdb-passages] notes={len(note_rows)} refs_found={total_found} linked={total_linked}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+
