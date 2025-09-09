@@ -141,13 +141,19 @@ def process_path_with_doctr(path: Path) -> int:
             continue
         w, h = img.size
         try:
-            result = predictor([np.array(img)])
+            doc = predictor([np.array(img)])
         except Exception as e:
             print(f"[ocr-image] doctr failed on {img_path}: {e}")
             continue
-        export = result[0].export()
+        try:
+            export = doc.export()
+        except Exception as e:
+            print(f"[ocr-image] doctr export failed on {img_path}: {e}")
+            continue
         blocks: List[Dict[str, Any]] = []
-        for block in export.get("pages", [{}])[0].get("blocks", []):
+        pages = export.get("pages", []) or []
+        page0 = pages[0] if pages else {}
+        for block in page0.get("blocks", []) or []:
             for line in block.get("lines", []):
                 words = line.get("words", [])
                 texts = [w.get("value", "") for w in words if w.get("value")]
