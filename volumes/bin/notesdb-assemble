@@ -1,0 +1,109 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sqlite3
+from contextlib import closing
+from datetime import datetime, timezone
+
+
+def open_db(path: str) -> sqlite3.Connection:
+    conn = sqlite3.connect(path)
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute("PRAGMA busy_timeout=5000")
+    return conn
+
+
+def iter_target_notes(conn: sqlite3.Connection, note_id: int | None, only_missing: bool):
+    if note_id is not None:
+        rows = conn.execute("SELECT id FROM note WHERE id=?", (note_id,)).fetchall()
+        for (nid,) in rows:
+            yield nid
+        return
+    if only_missing:
+        q = "SELECT id FROM note WHERE raw_text IS NULL OR TRIM(raw_text) = '' ORDER BY id"
+    else:
+        q = "SELECT id FROM note ORDER BY id"
+    for (nid,) in conn.execute(q):
+        yield nid
+
+
+def build_note_text(conn: sqlite3.Connection, note_id: int) -> str:
+    parts = []
+    rows = conn.execute(
+        "SELECT page_order, text FROM transcribed_page WHERE note_id=? ORDER BY page_order ASC, id ASC",
+        (note_id,),
+    ).fetchall()
+    for (order, text) in rows:
+        text = text or ""
+        parts.append(text.rstrip())
+    return "\n\n".join([p for p in parts if p]) + ("\n" if parts else "")
+
+
+def build_metadata(conn: sqlite3.Connection, note_id: int, raw_text: str) -> str:
+    page_count = conn.execute(
+        "SELECT COUNT(*) FROM transcribed_page WHERE note_id=?",
+        (note_id,),
+    ).fetchone()[0]
+    file_count = conn.execute(
+        "SELECT COUNT(*) FROM note_file WHERE note_id=?",
+        (note_id,),
+    ).fetchone()[0]
+    source_key = conn.execute(
+        "SELECT source_key FROM note_source WHERE note_id=?",
+        (note_id,),
+    ).fetchone()
+    source_key = source_key[0] if source_key else None
+    chars = len(raw_text)
+    lines = raw_text.count("\n") + (1 if raw_text and not raw_text.endswith("\n") else 0)
+    words = len([w for w in raw_text.split() if w])
+    meta = {
+        "source_key": source_key,
+        "page_count": int(page_count),
+        "file_count": int(file_count),
+        "text_stats": {"chars": chars, "lines": lines, "words": words},
+        "assembled_at": datetime.now(timezone.utc).isoformat(),
+        "assembled_by": "notesdb-assemble",
+    }
+    return json.dumps(meta, ensure_ascii=False)
+
+
+def assemble(conn: sqlite3.Connection, note_id: int | None, only_missing: bool, overwrite: bool) -> tuple[int, int]:
+    updated = 0
+    skipped = 0
+    for nid in iter_target_notes(conn, note_id, only_missing):
+        row = conn.execute("SELECT raw_text FROM note WHERE id=?", (nid,)).fetchone()
+        current = row[0] if row else None
+        if current and not overwrite and only_missing:
+            skipped += 1
+            continue
+        raw = build_note_text(conn, nid)
+        meta = build_metadata(conn, nid, raw)
+        conn.execute(
+            "UPDATE note SET raw_text=?, metadata_json=? WHERE id=?",
+            (raw, meta, nid),
+        )
+        updated += 1
+    return updated, skipped
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description="Assemble note.raw_text and metadata_json from transcribed pages")
+    ap.add_argument("--db", default=os.environ.get("NOTES_DB", "/data/notesdb/notes.db"))
+    ap.add_argument("--note-id", type=int)
+    ap.add_argument("--only-missing", action="store_true", help="Only fill notes with empty raw_text")
+    ap.add_argument("--overwrite", action="store_true", help="Overwrite existing raw_text")
+    args = ap.parse_args()
+
+    with closing(open_db(args.db)) as conn:
+        with conn:
+            updated, skipped = assemble(conn, args.note_id, args.only_missing, args.overwrite)
+    print(f"[notesdb-assemble] updated={updated} skipped={skipped}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+

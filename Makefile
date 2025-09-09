@@ -67,6 +67,11 @@ notesdb-write:
 	@test -n "$(MANIFEST)$(PATHS)" || (echo "Set MANIFEST=/path/to/moved_images.json or PATHS='img1 img2' [ORIGINAL=name]" && exit 1)
 	volumes/bin/notesdb-write --db $(NOTES_DB) $(if $(MANIFEST),--manifest $(MANIFEST),) $(if $(PATHS),--paths $(PATHS),) --images-dir $(IMAGES_DIR) $(if $(ORIGINAL),--original-name $(ORIGINAL),)
 
+## Assemble note.raw_text and metadata_json from pages
+.PHONY: notesdb-assemble
+notesdb-assemble:
+	volumes/bin/notesdb-assemble --db $(NOTES_DB) $(if $(NOTE_ID),--note-id $(NOTE_ID),) $(if $(ONLY_MISSING),--only-missing,) $(if $(OVERWRITE),--overwrite,)
+
 fill-citations:
 	python scripts/validate_notes_passages.py --notes-db $(NOTES_DB) --std-db $(DB) --fill-citations
 

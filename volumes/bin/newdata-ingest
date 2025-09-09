@@ -157,6 +157,13 @@ def main() -> int:
                     "--images-dir",
                     args.images_dir,
                 ], check=True)
+                # Assemble note text/metadata for any newly written notes
+                subprocess.run([
+                    "notesdb-assemble",
+                    "--db",
+                    args.notes_db,
+                    "--only-missing",
+                ], check=True)
 
             # 5) mark done and move source
             done_marker.write_text("ok", encoding="utf-8")
@@ -196,6 +203,13 @@ def main() -> int:
                     ], check=True)
                 except subprocess.CalledProcessError as e:
                     print(f"[ingest] notesdb-write failed for {dest}: {e}")
+                else:
+                    subprocess.run([
+                        "notesdb-assemble",
+                        "--db",
+                        args.notes_db,
+                        "--only-missing",
+                    ], check=True)
         # Optionally mark/move processed originals
         if args.move_processed and not args.dry_run:
             # If original still exists (e.g., we copied, not moved), move it
