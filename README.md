@@ -58,6 +58,18 @@ Make targets
 - `make fill-citations` — auto‑fill missing `passage.citation` labels (e.g., `1 Nephi 3:7–9`).
 - `make clean-notesdb` — remove the notes DB.
 
+Linked pages and migration
+- Linked navigation: image pages (note_file) now support `prev_file_id` and `next_file_id`. Transcribed pages are stored in a new `transcribed_page` table with `prev_id`/`next_id`.
+- Migrate existing DB: `make migrate-notesdb-links`
+- Rebuild pointers from page_order: `make rebuild-page-links`
+  - Advanced: `python scripts/rebuild_page_links.py --db volumes/notesdb/notes.db --only-missing --dry-run`
+- Mark files fully processed (skip on ingest):
+  - Mark any file with OCR artifacts: `make mark-processed-ocr`
+  - Or:
+    - By paths: `python scripts/mark_files_processed.py --db volumes/notesdb/notes.db --paths /data/images/a.png`
+    - By ids: `python scripts/mark_files_processed.py --db volumes/notesdb/notes.db --ids 1 2 3`
+    - Unset flag: add `--unset`
+
 Manual build (without Make)
 - `sqlite3 volumes/notesdb/notes.db < src/notesdb/schema.sql`
 - Then you can run `python scripts/validate_notes_passages.py --notes-db volumes/notesdb/notes.db --std-db volumes/scripdb/standardworks.db [--fill-citations]`.
@@ -65,6 +77,7 @@ Manual build (without Make)
 Notes
 - Personal data under `volumes/*` is ignored by Git except `volumes/bin/` and `volumes/scripdb/`.
 - Passage verse IDs reference `standardworks.db`; validation is done by attaching that DB during checks.
+ - Ingestion should prefer files where `fully_processed = 0` and update pointers as it loads pages. The rebuild script can fix up older records.
 
 ## Troubleshooting: DNS/Networking in CUDA/PyTorch Builds
 
