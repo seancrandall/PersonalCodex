@@ -38,12 +38,17 @@ clean-db:
 .PHONY: notesdb validate-notesdb fill-citations clean-notesdb
 
 notesdb:
-	mkdir -p $(dir $(NOTES_DB))
-	sqlite3 $(NOTES_DB) < $(NOTES_SCHEMA)
-	@echo "Built $(NOTES_DB) from $(NOTES_SCHEMA)"
+    mkdir -p $(dir $(NOTES_DB))
+    sqlite3 $(NOTES_DB) < $(NOTES_SCHEMA)
+    @echo "Built $(NOTES_DB) from $(NOTES_SCHEMA)"
+
+## Migrate notesdb to add next/prev pointers for images and transcribed pages
+.PHONY: migrate-notesdb-links
+migrate-notesdb-links:
+	python scripts/migrate_notesdb_add_page_links.py --db $(NOTES_DB)
 
 validate-notesdb:
-	python scripts/validate_notes_passages.py --notes-db $(NOTES_DB) --std-db $(DB)
+    python scripts/validate_notes_passages.py --notes-db $(NOTES_DB) --std-db $(DB)
 
 fill-citations:
 	python scripts/validate_notes_passages.py --notes-db $(NOTES_DB) --std-db $(DB) --fill-citations

@@ -50,11 +50,16 @@ CREATE TABLE IF NOT EXISTS note_file (
     file_id         INTEGER NOT NULL REFERENCES file(id) ON DELETE CASCADE,
     page_order      INTEGER NOT NULL, -- order of the file within the note (1-based recommended)
     region_bbox_json TEXT,            -- if the note covers only a region of the page
+    -- Optional linked-list navigation within a note
+    prev_file_id    INTEGER REFERENCES file(id) ON DELETE SET NULL,
+    next_file_id    INTEGER REFERENCES file(id) ON DELETE SET NULL,
     PRIMARY KEY (note_id, file_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_note_file_note_order ON note_file(note_id, page_order);
 CREATE INDEX IF NOT EXISTS idx_note_file_file ON note_file(file_id);
+CREATE INDEX IF NOT EXISTS idx_note_file_prev ON note_file(note_id, prev_file_id);
+CREATE INDEX IF NOT EXISTS idx_note_file_next ON note_file(note_id, next_file_id);
 
 -- ===============================
 -- Content Kernel: Blocks (paragraph/line/etc.)
@@ -163,6 +168,28 @@ CREATE TABLE IF NOT EXISTS block_tag (
 );
 
 -- ===============================
+-- Transcribed Pages (OCR/plain text per page)
+-- ===============================
+-- Represents page-level transcriptions with optional linked-list navigation.
+CREATE TABLE IF NOT EXISTS transcribed_page (
+    id              INTEGER PRIMARY KEY,
+    note_id         INTEGER NOT NULL REFERENCES note(id) ON DELETE CASCADE,
+    file_id         INTEGER REFERENCES file(id) ON DELETE SET NULL,
+    page_order      INTEGER NOT NULL,           -- position within the note
+    text            TEXT,                       -- plain text transcription
+    json_path       TEXT,                       -- optional JSON with tokens/bboxes/confidence
+    prev_id         INTEGER REFERENCES transcribed_page(id) ON DELETE SET NULL,
+    next_id         INTEGER UNIQUE REFERENCES transcribed_page(id) ON DELETE SET NULL,
+    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (note_id, page_order),
+    CHECK (prev_id IS NULL OR prev_id <> id),
+    CHECK (next_id IS NULL OR next_id <> id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_transcribed_page_note_order ON transcribed_page(note_id, page_order);
+CREATE INDEX IF NOT EXISTS idx_transcribed_page_file ON transcribed_page(file_id);
+
+-- ===============================
 -- Cross-References (Backlinks)
 -- ===============================
 CREATE TABLE IF NOT EXISTS note_link (
@@ -244,4 +271,3 @@ COMMIT;
 --    ATTACH DATABASE 'volumes/scripdb/standardworks.db' AS std;
 --    -- Then your application can validate passage.start_verse_id EXISTS in std.verses(id)
 -- 3) Preferred image formats for text: PNG (lossless) or TIFF (archival). JPEG accepted but not ideal for OCR.
-
