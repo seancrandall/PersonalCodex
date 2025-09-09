@@ -6,7 +6,7 @@ import json
 import os
 import subprocess
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple
 
 
 def run_tesseract_tsv(img: Path, lang: str, psm: int, oem: int) -> str:
@@ -193,6 +193,122 @@ def process_path_with_doctr(path: Path) -> int:
         count += 1
     return count
 
+
+def _segment_lines_opencv(img_bgr) -> List[Tuple[int, int, int, int]]:
+    import cv2
+    import numpy as np
+    gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+    # Binarize (adaptive helps uneven lighting)
+    bin_img = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C,
+                                    cv2.THRESH_BINARY_INV, 35, 15)
+    # Merge text within the same line
+    h, w = bin_img.shape
+    ksize = max(15, w // 60)
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (ksize, 3))
+    morph = cv2.dilate(bin_img, kernel, iterations=1)
+    # Find contours as line candidates
+    contours, _ = cv2.findContours(morph, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    boxes = []
+    for c in contours:
+        x, y, cw, ch = cv2.boundingRect(c)
+        if ch < 10 or cw < 30:
+            continue
+        boxes.append((x, y, x + cw, y + ch))
+    # Sort top-to-bottom
+    boxes.sort(key=lambda b: (b[1], b[0]))
+    # Merge overlapping boxes vertically (lines with split components)
+    merged: List[Tuple[int, int, int, int]] = []
+    for b in boxes:
+        if not merged:
+            merged.append(b)
+            continue
+        x0, y0, x1, y1 = merged[-1]
+        a0, b0, a1, b1 = b
+        # If current box overlaps significantly in y with last, merge
+        if not (b0 > y1 or b1 < y0):
+            nx0, ny0, nx1, ny1 = min(x0, a0), min(y0, b0), max(x1, a1), max(y1, b1)
+            merged[-1] = (nx0, ny0, nx1, ny1)
+        else:
+            merged.append(b)
+    return merged
+
+
+def process_path_with_trocr(path: Path, model_id: str | None = None, device: str | None = None) -> int:
+    try:
+        from transformers import TrOCRProcessor, VisionEncoderDecoderModel
+        import torch
+        from PIL import Image
+        import numpy as np
+        import cv2
+        import os as _os
+    except Exception as e:
+        print(f"[ocr-image] trocr prerequisites missing ({e}); skipping trocr.")
+        return 0
+
+    model_id = model_id or _os.environ.get("TROCR_MODEL_ID", "microsoft/trocr-base-handwritten")
+    # Try to load from local cache first if HF_HOME provided
+    local_only = False
+    models_dir = _os.environ.get("HF_HOME") or _os.environ.get("MODELS_DIR")
+    local_path = None
+    if models_dir:
+        candidate = Path(models_dir) / model_id.replace("/", "__")
+        if candidate.exists():
+            local_only = True
+            local_path = str(candidate)
+
+    try:
+        processor = TrOCRProcessor.from_pretrained(local_path or model_id, local_files_only=local_only)
+        model = VisionEncoderDecoderModel.from_pretrained(local_path or model_id, local_files_only=local_only)
+    except Exception as e:
+        print(f"[ocr-image] failed to load TrOCR model {model_id}: {e}")
+        return 0
+
+    device_t = torch.device("cuda" if (device or torch.cuda.is_available()) else "cpu")
+    model = model.to(device_t)
+    model.eval()
+
+    images: List[Path] = []
+    if path.is_dir():
+        images = sorted([p for p in path.iterdir() if p.suffix.lower() in {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp"}])
+    else:
+        images = [path]
+    count = 0
+    for img_path in images:
+        img_bgr = cv2.imread(str(img_path))
+        if img_bgr is None:
+            print(f"[ocr-image] failed to read image {img_path}")
+            continue
+        h, w = img_bgr.shape[:2]
+        line_boxes = _segment_lines_opencv(img_bgr)
+        blocks: List[Dict[str, Any]] = []
+        for (x0, y0, x1, y1) in line_boxes:
+            crop = img_bgr[max(0, y0):min(h, y1), max(0, x0):min(w, x1)]
+            if crop.size == 0:
+                continue
+            pil = Image.fromarray(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB))
+            try:
+                inputs = processor(images=pil, return_tensors="pt").to(device_t)
+                with torch.inference_mode():
+                    generated = model.generate(**inputs, max_new_tokens=80)
+                text = processor.batch_decode(generated, skip_special_tokens=True)[0]
+            except Exception as e:
+                print(f"[ocr-image] trocr inference failed on {img_path}: {e}")
+                continue
+            blocks.append({
+                "bbox": [float(x0), float(y0), float(x1), float(y1)],
+                "content": text.strip(),
+                "block_type": "line",
+                "confidence": None,
+            })
+        json_path = img_path.with_suffix(".ocr.json")
+        txt_path = img_path.with_suffix(".txt")
+        txt = "\n".join([b["content"] for b in blocks if b.get("content")]) + "\n"
+        json_path.write_text(json.dumps({"page": None, "blocks": blocks}, ensure_ascii=False, indent=2), encoding="utf-8")
+        txt_path.write_text(txt, encoding="utf-8")
+        print(f"[ocr-image] wrote {json_path.name} and {txt_path.name} (trocr)")
+        count += 1
+    return count
+
 def process_path_with_paddle(path: Path, lang: str) -> int:
     try:
         from paddleocr import PaddleOCR  # type: ignore
@@ -237,9 +353,9 @@ def process_path_with_paddle(path: Path, lang: str) -> int:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="OCR an image or directory of images (doctr → tesseract → paddle)")
+    ap = argparse.ArgumentParser(description="OCR an image or directory of images (trocr → doctr → tesseract → paddle)")
     ap.add_argument("input", help="Image path or directory containing images")
-    ap.add_argument("--engine", default=os.environ.get("OCR_ENGINE", "auto"), choices=["auto", "doctr", "tesseract", "paddle"])  # auto tries doctr, then tesseract, then paddle
+    ap.add_argument("--engine", default=os.environ.get("OCR_ENGINE", "auto"), choices=["auto", "trocr", "doctr", "tesseract", "paddle"])  # auto tries trocr, doctr, tesseract, paddle
     ap.add_argument("--langs", default=os.environ.get("OCR_LANGS", "eng"))
     ap.add_argument("--psm", type=int, default=int(os.environ.get("TESSERACT_PSM", "3")))
     ap.add_argument("--oem", type=int, default=int(os.environ.get("TESSERACT_OEM", "1")))
@@ -250,6 +366,12 @@ def main() -> int:
     if args.dry_run:
         print("[ocr-image] Dry run; not invoking OCR.")
         return 0
+    if args.engine in ("auto", "trocr"):
+        n = process_path_with_trocr(path)
+        if args.engine == "trocr":
+            return 0 if n >= 0 else 1
+        if n > 0:
+            return 0
     if args.engine in ("auto", "doctr"):
         n = process_path_with_doctr(path)
         if args.engine == "doctr":

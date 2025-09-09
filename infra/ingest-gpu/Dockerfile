@@ -12,6 +12,8 @@ python -m pip install --upgrade pip setuptools wheel
 pip install --no-cache-dir \
   "pymupdf==1.24.11" \
   "python-doctr[torch]==0.9.0" \
+  "transformers>=4.41,<5" \
+  sentencepiece \
   "opencv-python-headless>=4.8" \
   Pillow torchvision
 # Ensure non-headless OpenCV is not present (eliminate libGL runtime need)
