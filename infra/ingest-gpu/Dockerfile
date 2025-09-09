@@ -20,6 +20,13 @@ import sys, subprocess
 # Try to remove opencv-python if it got pulled as a dependency
 subprocess.run([sys.executable, '-m', 'pip', 'uninstall', '-y', 'opencv-python'], check=False)
 PY
+# Sanity: verify cv2 import is available in runtime
+python - <<'PY'
+import sys
+print('Python:', sys.executable)
+import cv2
+print('cv2 version:', cv2.__version__)
+PY
 SH
 
 WORKDIR /
