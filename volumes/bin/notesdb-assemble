@@ -51,19 +51,63 @@ def build_metadata(conn: sqlite3.Connection, note_id: int, raw_text: str) -> str
         "SELECT COUNT(*) FROM note_file WHERE note_id=?",
         (note_id,),
     ).fetchone()[0]
-    source_key = conn.execute(
+    # Basic note info
+    note_row = conn.execute(
+        "SELECT title, notebook FROM note WHERE id=?",
+        (note_id,),
+    ).fetchone()
+    title = note_row[0] if note_row else None
+    notebook = note_row[1] if note_row else None
+    # Source mapping
+    source_key_row = conn.execute(
         "SELECT source_key FROM note_source WHERE note_id=?",
         (note_id,),
     ).fetchone()
-    source_key = source_key[0] if source_key else None
+    source_key = source_key_row[0] if source_key_row else None
+    # Overall text stats
     chars = len(raw_text)
     lines = raw_text.count("\n") + (1 if raw_text and not raw_text.endswith("\n") else 0)
     words = len([w for w in raw_text.split() if w])
+    # Per-page summary
+    pages: list[dict] = []
+    cur = conn.execute(
+        """
+        SELECT tp.page_order, tp.id, tp.text, tp.json_path, tp.file_id,
+               f.path, f.original_filename, f.ocr_text_path, f.ocr_json_path, f.sha256
+        FROM transcribed_page tp
+        LEFT JOIN file f ON tp.file_id = f.id
+        WHERE tp.note_id=?
+        ORDER BY tp.page_order ASC, tp.id ASC
+        """,
+        (note_id,),
+    )
+    for (page_order, tpid, ptext, json_path, file_id, fpath, orig_name, ocr_txt_path, ocr_json_path, sha256) in cur.fetchall():
+        ptext = ptext or ""
+        p_chars = len(ptext)
+        p_lines = ptext.count("\n") + (1 if ptext and not ptext.endswith("\n") else 0)
+        p_words = len([w for w in ptext.split() if w])
+        pages.append(
+            {
+                "page_order": int(page_order) if page_order is not None else None,
+                "transcribed_page_id": int(tpid),
+                "file_id": int(file_id) if file_id is not None else None,
+                "image_path": fpath,
+                "original_filename": orig_name,
+                "ocr_text_path": ocr_txt_path,
+                "ocr_json_path": ocr_json_path or json_path,
+                "sha256": sha256,
+                "text_stats": {"chars": p_chars, "lines": p_lines, "words": p_words},
+            }
+        )
+
     meta = {
         "source_key": source_key,
+        "title": title,
+        "notebook": notebook,
         "page_count": int(page_count),
         "file_count": int(file_count),
         "text_stats": {"chars": chars, "lines": lines, "words": words},
+        "pages": pages,
         "assembled_at": datetime.now(timezone.utc).isoformat(),
         "assembled_by": "notesdb-assemble",
     }
@@ -106,4 +150,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
