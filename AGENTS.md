@@ -52,6 +52,7 @@
 ## Commit & Pull Request Guidelines
 - Conventional Commits (e.g., `feat(api): add verse index`, `fix(web): handle empty query`).
 - PRs include: clear description (what/why), linked issues, screenshots for UI, and notes for DB/model or compose changes. Keep scope small; ensure CI green.
+- After making substantive changes, create a focused commit and push to the current branch (use Conventional Commits).
 
 ## Security & Configuration Tips
 - Never commit secrets. Use `.env` files referenced by Compose; provide `.env.example`.
