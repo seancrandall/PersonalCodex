@@ -199,6 +199,11 @@ cython_debug/
 #  exclude from AI features like autocomplete and code analysis. Recommended for sensitive data
 #  refer to https://docs.cursor.com/context/ignore-files
 
+# Secrets
+# Ensure local OpenAI API key files are never committed
+openai.key
+/volumes/openai.key
+
 # Volumes: ignore all except code/safe data
 # Keep only volumes/bin (scripts) and volumes/scripdb (scripture DB assets)
 volumes/*
