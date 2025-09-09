@@ -66,6 +66,31 @@ Notes
 - Personal data under `volumes/*` is ignored by Git except `volumes/bin/` and `volumes/scripdb/`.
 - Passage verse IDs reference `standardworks.db`; validation is done by attaching that DB during checks.
 
+## Troubleshooting: DNS/Networking in CUDA/PyTorch Builds
+
+CUDA and PyTorch base images can hit DNS/apt flakiness on Fedora/systemd‑resolved hosts. Use both host and container fixes:
+
+- Docker daemon DNS (host):
+  - Set nameservers in `/etc/docker/daemon.json`, then restart Docker:
+    - `{ "dns": ["<router>", "1.1.1.1", "8.8.8.8"], "dns-opts": ["edns0"], "dns-search": [] }`
+  - Configure BuildKit DNS in `/etc/buildkit/buildkitd.toml`:
+    - `[dns] nameservers=["<router>", "1.1.1.1", "8.8.8.8"], options=["edns0"], searchDomains=[]`
+
+- Inside Dockerfiles (container level):
+  - Wrap apt/pip in `RUN --network=host <<'SH' ... SH`.
+  - Before `apt-get update`, temporarily disable NVIDIA/CUDA lists and force IPv4 + retries:
+    - Move `/etc/apt/sources.list.d/*cuda*.list` and `*nvidia*.list` aside; add `/etc/apt/apt.conf.d/99-retries-ipv4` with `Acquire::Retries "3"; Acquire::ForceIPv4 "true";`.
+  - Prefer wheels‑only pip installs: `pip install --only-binary :all: <pkgs>`.
+  - Conda images: ensure PATH includes `/opt/conda/bin` so `/usr/bin/env python` resolves (compose sets this for `ingest`).
+  - OpenCV: use `opencv-python-headless` to avoid GL/GUI deps; add `libgl1` only if needed.
+
+- Quick checks:
+  - `docker info` should list your DNS.
+  - Disable BuildKit temporarily to isolate: `DOCKER_BUILDKIT=0 docker build .`
+  - Smoke test base image DNS: `docker run --rm --dns 1.1.1.1 nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04 bash -lc 'apt-get update -qq && getent hosts deb.debian.org || true'`
+
+See AGENTS.md for detailed guidance and rationale.
+
 Helper CLI
 - `volumes/bin/notesdb-rebuild.sh` — rebuilds the notes DB from schema and validates passages.
   - Usage: `volumes/bin/notesdb-rebuild.sh [--fill] [--dry-run] [--notes-db PATH] [--schema PATH] [--std-db PATH]`
