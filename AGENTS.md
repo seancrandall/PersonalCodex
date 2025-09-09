@@ -67,6 +67,7 @@
 - Testing: provide a small sample in `volumes/scans/sample/` and a dry-run mode that reads one file and prints a summary.
 
 ## Agent-Specific Instructions
+- Always first: ensure the git history is up to date. Before making any changes, snapshot all intentional, non-ephemeral workspace changes into a single commit (e.g., `chore(repo): snapshot workspace before agent changes`) so we can cleanly roll back if needed. Avoid committing generated artifacts (e.g., virtualenvs under `volumes/bin/.venv-*`, temporary outputs under `src/tmp/`, OCR caches, or large model files under `volumes/`). If such files are staged, unstage them before the snapshot.
 - Prefer dockerized workflows; avoid host-specific steps. If adding services, update `compose.yml` and document ports/env.
 - Keep patches minimal and aligned to the structure above; discuss major tooling changes in an issue first.
 
