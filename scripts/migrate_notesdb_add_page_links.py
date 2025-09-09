@@ -78,6 +78,10 @@ def ensure_transcribed_page(conn: sqlite3.Connection) -> None:
         cols = [row[1] for row in c.fetchall()]
         if "page_date" not in cols:
             c.execute("ALTER TABLE transcribed_page ADD COLUMN page_date TEXT")
+        if "page_date_precision" not in cols:
+            c.execute(
+                "ALTER TABLE transcribed_page ADD COLUMN page_date_precision TEXT"
+            )
         # Indexes
         c.execute(
             "CREATE INDEX IF NOT EXISTS idx_transcribed_page_note_order ON transcribed_page(note_id, page_order)"
@@ -147,6 +151,10 @@ def ensure_note_date_created(conn: sqlite3.Connection) -> None:
         cols = [row[1] for row in c.fetchall()]
         if "date_created" not in cols:
             c.execute("ALTER TABLE note ADD COLUMN date_created TEXT")
+        if "date_created_precision" not in cols:
+            c.execute(
+                "ALTER TABLE note ADD COLUMN date_created_precision TEXT"
+            )
 
 
 def main() -> None:

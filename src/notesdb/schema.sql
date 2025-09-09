@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS note (
     author          TEXT,
     notebook        TEXT,
     date_created    TEXT, -- ISO date YYYY-MM-DD if known
+    date_created_precision TEXT CHECK (date_created_precision IN ('day','month','year') OR date_created_precision IS NULL),
     status          TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','archived')),
     raw_text        TEXT,
     metadata_json   TEXT, -- JSON1 payload (arbitrary metadata)
@@ -189,6 +190,7 @@ CREATE TABLE IF NOT EXISTS transcribed_page (
     file_id         INTEGER REFERENCES file(id) ON DELETE SET NULL,
     page_order      INTEGER NOT NULL,           -- position within the note
     page_date       TEXT,                       -- ISO date YYYY-MM-DD inferred for this page
+    page_date_precision TEXT CHECK (page_date_precision IN ('day','month','year') OR page_date_precision IS NULL),
     text            TEXT,                       -- plain text transcription
     json_path       TEXT,                       -- optional JSON with tokens/bboxes/confidence
     prev_id         INTEGER REFERENCES transcribed_page(id) ON DELETE SET NULL,

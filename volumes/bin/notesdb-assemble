@@ -72,7 +72,7 @@ def build_metadata(conn: sqlite3.Connection, note_id: int, raw_text: str) -> str
     pages: list[dict] = []
     cur = conn.execute(
         """
-        SELECT tp.page_order, tp.id, tp.text, tp.json_path, tp.file_id, tp.page_date,
+        SELECT tp.page_order, tp.id, tp.text, tp.json_path, tp.file_id, tp.page_date, tp.page_date_precision,
                f.path, f.original_filename, f.ocr_text_path, f.ocr_json_path, f.sha256
         FROM transcribed_page tp
         LEFT JOIN file f ON tp.file_id = f.id
@@ -81,7 +81,7 @@ def build_metadata(conn: sqlite3.Connection, note_id: int, raw_text: str) -> str
         """,
         (note_id,),
     )
-    for (page_order, tpid, ptext, json_path, file_id, page_date, fpath, orig_name, ocr_txt_path, ocr_json_path, sha256) in cur.fetchall():
+    for (page_order, tpid, ptext, json_path, file_id, page_date, page_prec, fpath, orig_name, ocr_txt_path, ocr_json_path, sha256) in cur.fetchall():
         ptext = ptext or ""
         p_chars = len(ptext)
         p_lines = ptext.count("\n") + (1 if ptext and not ptext.endswith("\n") else 0)
@@ -92,6 +92,7 @@ def build_metadata(conn: sqlite3.Connection, note_id: int, raw_text: str) -> str
                 "transcribed_page_id": int(tpid),
                 "file_id": int(file_id) if file_id is not None else None,
                 "page_date": page_date,
+                "page_date_precision": page_prec,
                 "image_path": fpath,
                 "original_filename": orig_name,
                 "ocr_text_path": ocr_txt_path,
@@ -102,14 +103,16 @@ def build_metadata(conn: sqlite3.Connection, note_id: int, raw_text: str) -> str
         )
 
     # Note-level date
-    nrow = conn.execute("SELECT date_created FROM note WHERE id=?", (note_id,)).fetchone()
+    nrow = conn.execute("SELECT date_created, date_created_precision FROM note WHERE id=?", (note_id,)).fetchone()
     note_date = nrow[0] if nrow else None
+    note_date_precision = nrow[1] if nrow else None
 
     meta = {
         "source_key": source_key,
         "title": title,
         "notebook": notebook,
         "date_created": note_date,
+        "date_created_precision": note_date_precision,
         "page_count": int(page_count),
         "file_count": int(file_count),
         "text_stats": {"chars": chars, "lines": lines, "words": words},

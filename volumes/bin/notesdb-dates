@@ -26,17 +26,20 @@ MONTHS = {
 }
 
 
-ISO_RE = re.compile(r"\b(19\d{2}|20\d{2})-(0?[1-9]|1[0-2])-(0?[1-9]|[12]\d|3[01])\b")
-NUM_RE = re.compile(r"\b(0?[1-9]|1[0-2])[/-](0?[1-9]|[12]\d|3[01])[/-](\d{2,4})\b")
+ISO_RE = re.compile(r"\b(19\d{2}|20\d{2})[-/\.](0?[1-9]|1[0-2])[-/\.](0?[1-9]|[12]\d|3[01])\b")
+NUM_RE = re.compile(r"\b(0?[1-9]|1[0-2])[\-\./_](0?[1-9]|[12]\d|3[01])[\-\./_](\d{2,4}|'\d{2}|’\d{2})\b")
 NAME1_RE = re.compile(
-    r"\b(\w{3,9})\.?,?\s+([0-3]?\d)(?:st|nd|rd|th)?(?:,)?\s+(\d{2,4})\b",
+    r"\b(\w{3,9})\.?,?\s+([0-3]?\d)(?:st|nd|rd|th)?(?:,)?\s+(\d{2,4}|'\d{2}|’\d{2})\b",
     re.IGNORECASE,
 )
 NAME2_RE = re.compile(
-    r"\b([0-3]?\d)(?:st|nd|rd|th)?\s+(\w{3,9})\.?,?\s+(\d{2,4})\b",
+    r"\b([0-3]?\d)(?:st|nd|rd|th)?\s+(\w{3,9})\.?,?\s+(\d{2,4}|'\d{2}|’\d{2})\b",
     re.IGNORECASE,
 )
 COMPACT_YMD_RE = re.compile(r"\b(19\d{2}|20\d{2})(0[1-9]|1[0-2])([012]\d|3[01])\b")
+YM_ISO_RE = re.compile(r"\b(19\d{2}|20\d{2})[-/\.](0?[1-9]|1[0-2])\b")
+MY_NAME_RE = re.compile(r"\b(\w{3,9})\.?,?\s+(\d{2,4}|'\d{2}|’\d{2})\b", re.IGNORECASE)
+Y_ONLY_RE = re.compile(r"\b(19\d{2}|20\d{2})\b")
 
 
 def _pad(n: int) -> str:
@@ -57,7 +60,15 @@ def _valid_date(y: int, m: int, d: int) -> bool:
         return False
 
 
-def parse_date_str(s: str) -> Optional[str]:
+def _parse_yy_fragment(val: str) -> int:
+    val = val.strip().lstrip("'").lstrip("’")
+    try:
+        return int(val)
+    except Exception:
+        return 0
+
+
+def parse_date_str(s: str) -> Optional[tuple[str, str]]:
     if not s:
         return None
     # ISO 8601
@@ -65,56 +76,83 @@ def parse_date_str(s: str) -> Optional[str]:
     if m:
         y, mo, da = int(m.group(1)), int(m.group(2)), int(m.group(3))
         if _valid_date(y, mo, da):
-            return f"{_normalize_year(y)}-{_pad(mo)}-{_pad(da)}"
+            return f"{_normalize_year(y)}-{_pad(mo)}-{_pad(da)}", "day"
     # Month name first
     m = NAME1_RE.search(s)
     if m:
         mon = MONTHS.get(m.group(1).lower().rstrip('.'), None)
         if mon:
             d = int(m.group(2))
-            y = int(m.group(3))
+            y = _parse_yy_fragment(m.group(3))
             if _valid_date(y, mon, d):
-                return f"{_normalize_year(y)}-{_pad(mon)}-{_pad(d)}"
+                return f"{_normalize_year(y)}-{_pad(mon)}-{_pad(d)}", "day"
     # Day first then month name
     m = NAME2_RE.search(s)
     if m:
         d = int(m.group(1))
         mon = MONTHS.get(m.group(2).lower().rstrip('.'), None)
-        y = int(m.group(3))
+        y = _parse_yy_fragment(m.group(3))
         if mon and _valid_date(y, mon, d):
-            return f"{_normalize_year(y)}-{_pad(mon)}-{_pad(d)}"
+            return f"{_normalize_year(y)}-{_pad(mon)}-{_pad(d)}", "day"
     # Numeric US
     m = NUM_RE.search(s)
     if m:
-        mo, da, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        mo, da, yfrag = int(m.group(1)), int(m.group(2)), _parse_yy_fragment(m.group(3))
+        y = yfrag
         if _valid_date(y, mo, da):
-            return f"{_normalize_year(y)}-{_pad(mo)}-{_pad(da)}"
+            return f"{_normalize_year(y)}-{_pad(mo)}-{_pad(da)}", "day"
     # Compact YYYYMMDD
     m = COMPACT_YMD_RE.search(s)
     if m:
         y, mo, da = int(m.group(1)), int(m.group(2)), int(m.group(3))
         if _valid_date(y, mo, da):
-            return f"{_normalize_year(y)}-{_pad(mo)}-{_pad(da)}"
+            return f"{_normalize_year(y)}-{_pad(mo)}-{_pad(da)}", "day"
+    # Year-month without day
+    m = YM_ISO_RE.search(s)
+    if m:
+        y, mo = int(m.group(1)), int(m.group(2))
+        if 1 <= mo <= 12:
+            return f"{_normalize_year(y)}-{_pad(mo)}-01", "month"
+    # Month name + year
+    m = MY_NAME_RE.search(s)
+    if m:
+        mon = MONTHS.get(m.group(1).lower().rstrip('.'), None)
+        y = _parse_yy_fragment(m.group(2))
+        if mon and y:
+            return f"{_normalize_year(y)}-{_pad(mon)}-01", "month"
+    # Year only
+    m = Y_ONLY_RE.search(s)
+    if m:
+        y = int(m.group(1))
+        return f"{_normalize_year(y)}-01-01", "year"
     return None
 
 
-def find_date_in_text(text: str, head_chars: int = 300) -> Optional[str]:
+def find_date_in_text(text: str, head_chars: int = 600, head_lines: int = 5) -> Optional[tuple[str, str]]:
     if not text:
         return None
+    # Try first N non-empty lines
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()][: head_lines]
+    for ln in lines:
+        parsed = parse_date_str(ln)
+        if parsed:
+            return parsed
+    # Fallback to first chunk of text
     head = text[:head_chars]
     return parse_date_str(head)
 
 
-def find_date_for_page(conn: sqlite3.Connection, note_id: int, page_order: int, file_orig_name: Optional[str], lookback: int) -> Tuple[Optional[str], str]:
+def find_date_for_page(conn: sqlite3.Connection, note_id: int, page_order: int, file_orig_name: Optional[str], lookback: int) -> Tuple[Optional[str], str, Optional[str]]:
     # 1) Own text
     row = conn.execute(
         "SELECT text FROM transcribed_page WHERE note_id=? AND page_order=?",
         (note_id, page_order),
     ).fetchone()
     if row:
-        d = find_date_in_text(row[0] or "")
-        if d:
-            return d, "text"
+        res = find_date_in_text(row[0] or "")
+        if res:
+            d, prec = res
+            return d, "text", prec
     # 2) Previous pages up to lookback
     for delta in range(1, lookback + 1):
         prev = page_order - delta
@@ -125,15 +163,17 @@ def find_date_for_page(conn: sqlite3.Connection, note_id: int, page_order: int, 
             (note_id, prev),
         ).fetchone()
         if prow:
-            d = find_date_in_text(prow[0] or "")
-            if d:
-                return d, "previous"
+            res = find_date_in_text(prow[0] or "")
+            if res:
+                d, prec = res
+                return d, "previous", prec
     # 3) Original filename
     if file_orig_name:
-        d = parse_date_str(file_orig_name)
-        if d:
-            return d, "filename"
-    return None, ""
+        res = parse_date_str(file_orig_name)
+        if res:
+            d, prec = res
+            return d, "filename", prec
+    return None, "", None
 
 
 def process_note(conn: sqlite3.Connection, note_id: int, only_missing: bool, lookback: int) -> Tuple[int, int]:
@@ -154,11 +194,11 @@ def process_note(conn: sqlite3.Connection, note_id: int, only_missing: bool, loo
             if page_date:
                 note_dates.append(page_date)
             continue
-        d, source = find_date_for_page(conn, note_id, int(page_order), orig_name, lookback)
+        d, source, prec = find_date_for_page(conn, note_id, int(page_order), orig_name, lookback)
         if d and d != page_date:
             conn.execute(
-                "UPDATE transcribed_page SET page_date=? WHERE note_id=? AND page_order=?",
-                (d, note_id, page_order),
+                "UPDATE transcribed_page SET page_date=?, page_date_precision=? WHERE note_id=? AND page_order=?",
+                (d, prec, note_id, page_order),
             )
             updated_pages += 1
             note_dates.append(d)
@@ -170,7 +210,13 @@ def process_note(conn: sqlite3.Connection, note_id: int, only_missing: bool, loo
         note_date = d
         break
     if note_date:
-        conn.execute("UPDATE note SET date_created=? WHERE id=?", (note_date, note_id))
+        # Determine precision of the chosen earliest date (first matching page)
+        nprec_row = conn.execute(
+            "SELECT page_date_precision FROM transcribed_page WHERE note_id=? AND page_date=? LIMIT 1",
+            (note_id, note_date),
+        ).fetchone()
+        note_prec = nprec_row[0] if nprec_row else None
+        conn.execute("UPDATE note SET date_created=?, date_created_precision=? WHERE id=?", (note_date, note_prec, note_id))
     return updated_pages, 1 if note_date else 0
 
 
@@ -187,6 +233,7 @@ def main() -> int:
     ap.add_argument("--db", default="/data/notesdb/notes.db")
     ap.add_argument("--note-id", type=int)
     ap.add_argument("--only-missing", action="store_true")
+    ap.add_argument("--overwrite", action="store_true")
     ap.add_argument("--lookback", type=int, default=5)
     args = ap.parse_args()
 
@@ -196,7 +243,8 @@ def main() -> int:
         notes_with_date = 0
         with conn:
             for nid in iter_note_ids(conn, args.note_id):
-                up_pages, note_has_date = process_note(conn, nid, args.only_missing, args.lookback)
+                up_pages, note_has_date = process_note(conn, nid, not args.overwrite and args.only_m
+issing, args.lookback)
                 total_pages += up_pages
                 notes_with_date += note_has_date
     print(f"[notesdb-dates] page_updates={total_pages} notes_with_date={notes_with_date}")
@@ -205,4 +253,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
