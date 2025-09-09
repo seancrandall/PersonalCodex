@@ -20,6 +20,8 @@ import sys, subprocess
 # Try to remove opencv-python if it got pulled as a dependency
 subprocess.run([sys.executable, '-m', 'pip', 'uninstall', '-y', 'opencv-python'], check=False)
 PY
+# Ensure headless OpenCV files are present after uninstall step
+python -m pip install --no-cache-dir --upgrade --force-reinstall opencv-python-headless==4.11.0.86
 # Sanity: verify cv2 import is available in runtime
 python - <<'PY'
 import sys
