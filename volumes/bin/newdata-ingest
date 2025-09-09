@@ -164,6 +164,13 @@ def main() -> int:
                     args.notes_db,
                     "--only-missing",
                 ], check=True)
+                # Infer dates for new pages/notes
+                subprocess.run([
+                    "notesdb-dates",
+                    "--db",
+                    args.notes_db,
+                    "--only-missing",
+                ], check=True)
 
             # 5) mark done and move source
             done_marker.write_text("ok", encoding="utf-8")
@@ -206,6 +213,12 @@ def main() -> int:
                 else:
                     subprocess.run([
                         "notesdb-assemble",
+                        "--db",
+                        args.notes_db,
+                        "--only-missing",
+                    ], check=True)
+                    subprocess.run([
+                        "notesdb-dates",
                         "--db",
                         args.notes_db,
                         "--only-missing",

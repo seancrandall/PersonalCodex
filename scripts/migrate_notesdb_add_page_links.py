@@ -61,6 +61,7 @@ def ensure_transcribed_page(conn: sqlite3.Connection) -> None:
                 note_id         INTEGER NOT NULL REFERENCES note(id) ON DELETE CASCADE,
                 file_id         INTEGER REFERENCES file(id) ON DELETE SET NULL,
                 page_order      INTEGER NOT NULL,
+                page_date       TEXT,
                 text            TEXT,
                 json_path       TEXT,
                 prev_id         INTEGER REFERENCES transcribed_page(id) ON DELETE SET NULL,
@@ -78,6 +79,9 @@ def ensure_transcribed_page(conn: sqlite3.Connection) -> None:
         )
         c.execute(
             "CREATE INDEX IF NOT EXISTS idx_transcribed_page_file ON transcribed_page(file_id)"
+        )
+        c.execute(
+            "CREATE INDEX IF NOT EXISTS idx_transcribed_page_date ON transcribed_page(page_date)"
         )
 
 
@@ -131,6 +135,15 @@ def ensure_note_source_table(conn: sqlite3.Connection) -> None:
         )
 
 
+def ensure_note_date_created(conn: sqlite3.Connection) -> None:
+    with conn:
+        c = conn.cursor()
+        c.execute("PRAGMA table_info(note)")
+        cols = [row[1] for row in c.fetchall()]
+        if "date_created" not in cols:
+            c.execute("ALTER TABLE note ADD COLUMN date_created TEXT")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--db", required=True, help="Path to notes.db")
@@ -143,6 +156,7 @@ def main() -> None:
         ensure_file_processed_flag(conn)
         ensure_original_filename_and_backfill(conn)
         ensure_note_source_table(conn)
+        ensure_note_date_created(conn)
     print("Migration complete: linked-list columns and transcribed_page ensured.")
 
 

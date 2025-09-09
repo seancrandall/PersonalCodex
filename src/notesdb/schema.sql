@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS note (
     title           TEXT,
     author          TEXT,
     notebook        TEXT,
+    date_created    TEXT, -- ISO date YYYY-MM-DD if known
     status          TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','archived')),
     raw_text        TEXT,
     metadata_json   TEXT, -- JSON1 payload (arbitrary metadata)
@@ -187,6 +188,7 @@ CREATE TABLE IF NOT EXISTS transcribed_page (
     note_id         INTEGER NOT NULL REFERENCES note(id) ON DELETE CASCADE,
     file_id         INTEGER REFERENCES file(id) ON DELETE SET NULL,
     page_order      INTEGER NOT NULL,           -- position within the note
+    page_date       TEXT,                       -- ISO date YYYY-MM-DD inferred for this page
     text            TEXT,                       -- plain text transcription
     json_path       TEXT,                       -- optional JSON with tokens/bboxes/confidence
     prev_id         INTEGER REFERENCES transcribed_page(id) ON DELETE SET NULL,
@@ -199,6 +201,7 @@ CREATE TABLE IF NOT EXISTS transcribed_page (
 
 CREATE INDEX IF NOT EXISTS idx_transcribed_page_note_order ON transcribed_page(note_id, page_order);
 CREATE INDEX IF NOT EXISTS idx_transcribed_page_file ON transcribed_page(file_id);
+CREATE INDEX IF NOT EXISTS idx_transcribed_page_date ON transcribed_page(page_date);
 
 -- ===============================
 -- Cross-References (Backlinks)
