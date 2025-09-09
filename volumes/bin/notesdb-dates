@@ -243,8 +243,8 @@ def main() -> int:
         notes_with_date = 0
         with conn:
             for nid in iter_note_ids(conn, args.note_id):
-                up_pages, note_has_date = process_note(conn, nid, not args.overwrite and args.only_m
-issing, args.lookback)
+                only_missing = (not args.overwrite) and args.only_missing
+                up_pages, note_has_date = process_note(conn, nid, only_missing, args.lookback)
                 total_pages += up_pages
                 notes_with_date += note_has_date
     print(f"[notesdb-dates] page_updates={total_pages} notes_with_date={notes_with_date}")
