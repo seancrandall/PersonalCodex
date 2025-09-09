@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Kraken OCR wrapper: binarize -> segment -> ocr for a batch of images.
+# - Prefer GPU if --device cuda (or cuda:N) is supplied.
+# - Requires a kraken .mlmodel; pass --model-path or place one under volumes/models/kraken.
+
+usage() {
+  cat <<USAGE
+Usage: $(basename "$0") --input <dir> [--pattern '*.png'] --model-path <path.mlmodel|dir> [--device cpu|cuda|cuda:0] [--suffix '.kraken.txt'] [--workers 0] [--get-model <name>]
+
+Examples:
+  $(basename "$0") --input src/tmp/trocr --pattern '*.png' --device cuda \
+    --model-path volumes/models/kraken/en_best.mlmodel
+
+  # If you need a model:
+  #   source volumes/bin/.venv-kraken/bin/activate && cd volumes/models/kraken && kraken get en_best
+USAGE
+}
+
+INPUT_DIR=""
+PATTERN="*.png"
+MODEL_PATH=""
+DEVICE="cpu"
+SUFFIX=".kraken.txt"
+WORKERS="0"  # default 0 to avoid /dev/shm semaphore issues in constrained envs
+GET_MODEL=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --input) INPUT_DIR="$2"; shift 2 ;;
+    --pattern) PATTERN="$2"; shift 2 ;;
+    --model-path) MODEL_PATH="$2"; shift 2 ;;
+    --device) DEVICE="$2"; shift 2 ;;
+    --suffix) SUFFIX="$2"; shift 2 ;;
+    --workers) WORKERS="$2"; shift 2 ;;
+    --get-model) GET_MODEL="$2"; shift 2 ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "Unknown arg: $1"; usage; exit 2 ;;
+  esac
+done
+
+if [[ -z "$INPUT_DIR" ]]; then
+  echo "[!] --input is required" >&2; usage; exit 2
+fi
+if [[ -z "$MODEL_PATH" ]]; then
+  echo "[!] --model-path is required (e.g., volumes/models/kraken/en_best.mlmodel or a directory)" >&2; usage; exit 2
+fi
+
+# If MODEL_PATH is a dir, try to locate a .mlmodel inside it
+if [[ -d "$MODEL_PATH" ]]; then
+  MODEL_DIR="$MODEL_PATH"
+  # If requested, try to fetch a model into the directory
+  if [[ -n "$GET_MODEL" ]]; then
+    echo "[+] Downloading kraken model '$GET_MODEL' into $MODEL_DIR"
+    mkdir -p "$MODEL_DIR"
+    (cd "$MODEL_DIR" && kraken get "$GET_MODEL" || true)
+  fi
+  # Pick the first .mlmodel
+  set +e
+  FOUND=$(ls -1 "$MODEL_DIR"/*.mlmodel 2>/dev/null | head -n1)
+  set -e
+  if [[ -z "${FOUND:-}" ]]; then
+    echo "[!] No .mlmodel found in $MODEL_DIR. Provide --get-model <name> or a concrete --model-path."
+    exit 3
+  fi
+  MODEL_PATH="$FOUND"
+fi
+
+if [[ ! -f "$MODEL_PATH" ]]; then
+  echo "[!] Model not found: $MODEL_PATH" >&2; exit 3
+fi
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+VENV_DIR="${VENV_DIR:-$SCRIPT_DIR/.venv-kraken}"
+
+if [[ -d "$VENV_DIR" ]]; then
+  # shellcheck source=/dev/null
+  source "$VENV_DIR/bin/activate"
+fi
+
+shopt -s nullglob
+mapfile -t FILES < <(cd "$INPUT_DIR" && ls -1 ${PATTERN})
+
+if [[ ${#FILES[@]} -eq 0 ]]; then
+  echo "[i] No files match $PATTERN under $INPUT_DIR"; exit 0
+fi
+
+echo "[+] Processing ${#FILES[@]} images from $INPUT_DIR with device=$DEVICE"
+
+for f in "${FILES[@]}"; do
+  in="$INPUT_DIR/$f"
+  out_base="${f%.*}$SUFFIX"
+  out="$INPUT_DIR/$out_base"
+
+  echo "[>] $f -> $out_base"
+  # kraken pipeline: binarize -> segment -> ocr
+  # --device and --workers are passed to ocr; segment/binarize run on CPU but are fast.
+  kraken -i "$in" "$out" binarize segment ocr -m "$MODEL_PATH" --device "$DEVICE" --workers "$WORKERS"
+done
+
+echo "[+] Done"

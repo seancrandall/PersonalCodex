@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import List, Dict, Any, Tuple
 import base64
 import time
+import random
 
 
 def run_tesseract_tsv(img: Path, lang: str, psm: int, oem: int) -> str:
@@ -449,6 +450,7 @@ def _read_openai_key() -> str | None:
 
 def _openai_vision_ocr(image_path: Path, api_key: str, model: str = "gpt-4o-mini") -> str:
     import requests
+    from email.utils import parsedate_to_datetime
 
     img_b64 = base64.b64encode(image_path.read_bytes()).decode("ascii")
     url = "https://api.openai.com/v1/chat/completions"
@@ -470,23 +472,76 @@ def _openai_vision_ocr(image_path: Path, api_key: str, model: str = "gpt-4o-mini
         "temperature": 0.0,
         "max_tokens": 4096,
     }
-    resp = requests.post(url, headers=headers, json=payload, timeout=120)
-    data = None
-    try:
-        resp.raise_for_status()
-        data = resp.json()
-    except Exception as e:
+
+    max_retries = int(os.environ.get("OPENAI_OCR_MAX_RETRIES", "5"))
+    backoff_cap = float(os.environ.get("OPENAI_OCR_BACKOFF_CAP_S", "30"))
+    base_backoff = float(os.environ.get("OPENAI_OCR_BACKOFF_BASE_S", "1.0"))
+
+    def _sleep_backoff(attempt: int, retry_after: str | None = None) -> None:
+        # Honor Retry-After header if provided
+        if retry_after:
+            delay = None
+            try:
+                delay = float(int(retry_after))
+            except Exception:
+                try:
+                    dt = parsedate_to_datetime(retry_after)
+                    if dt:
+                        # Compute seconds until dt; fallback to base backoff on failure
+                        delay = max(0.0, (dt - parsedate_to_datetime(time.strftime('%a, %d %b %Y %H:%M:%S GMT', time.gmtime()))).total_seconds())
+                except Exception:
+                    delay = None
+            if delay is not None:
+                time.sleep(min(delay, backoff_cap))
+                return
+        # Exponential backoff with jitter
+        sleep_s = min(backoff_cap, base_backoff * (2 ** max(0, attempt - 1)))
+        jitter = random.uniform(0.75, 1.25)
+        time.sleep(sleep_s * jitter)
+
+    attempt = 0
+    last_err: Exception | None = None
+    while attempt <= max_retries:
+        attempt += 1
         try:
-            err = resp.json()
-            msg = err.get("error", {}).get("message") or err
+            resp = requests.post(url, headers=headers, json=payload, timeout=120)
+        except Exception as e:
+            last_err = e
+            if attempt <= max_retries:
+                _sleep_backoff(attempt)
+                continue
+            raise RuntimeError(f"OpenAI request error: {e}") from e
+
+        if resp.status_code == 429 or 500 <= resp.status_code < 600 or resp.status_code == 408:
+            # Rate limited or server error; backoff and retry
+            retry_after = resp.headers.get("Retry-After") or resp.headers.get("retry-after")
+            if attempt <= max_retries:
+                _sleep_backoff(attempt, retry_after=retry_after)
+                continue
+            try:
+                err = resp.json()
+                msg = err.get("error", {}).get("message") or err
+            except Exception:
+                msg = resp.text
+            raise RuntimeError(f"OpenAI request failed after retries ({resp.status_code}): {msg}")
+
+        data = None
+        try:
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as e:
+            try:
+                err = resp.json()
+                msg = err.get("error", {}).get("message") or err
+            except Exception:
+                msg = resp.text
+            raise RuntimeError(f"OpenAI request failed ({resp.status_code}): {msg}") from e
+
+        try:
+            return data["choices"][0]["message"]["content"].strip()
         except Exception:
-            msg = resp.text
-        raise RuntimeError(f"OpenAI request failed ({resp.status_code}): {msg}") from e
-    try:
-        return data["choices"][0]["message"]["content"].strip()
-    except Exception:
-        # Fallback stringify
-        return json.dumps(data)
+            # Fallback stringify
+            return json.dumps(data)
 
 
 def process_path_with_openai(path: Path) -> int:
@@ -503,7 +558,8 @@ def process_path_with_openai(path: Path) -> int:
     model = os.environ.get("OPENAI_OCR_MODEL", "gpt-4o-mini")
     fb_model = os.environ.get("OPENAI_OCR_FALLBACK_MODEL", "gpt-4o-mini")
     print(f"[ocr-image] OpenAI OCR model={model} fallback={fb_model}")
-    delay_s = float(os.environ.get("OPENAI_OCR_DELAY_S", "0.0"))
+    # Inter-page delay with jitter (default 2s ±25%)
+    delay_base_s = float(os.environ.get("OPENAI_OCR_DELAY_S", "2.0"))
     for img in images:
         try:
             text = _openai_vision_ocr(img, key, model=model)
@@ -537,8 +593,9 @@ def process_path_with_openai(path: Path) -> int:
         txt_path.write_text(txt_out, encoding="utf-8")
         print(f"[ocr-image] wrote {json_path.name} and {txt_path.name} (openai)")
         count += 1
-        if delay_s > 0:
-            time.sleep(delay_s)
+        if delay_base_s > 0:
+            jitter = random.uniform(0.75, 1.25)
+            time.sleep(delay_base_s * jitter)
     return count
 
 if __name__ == "__main__":

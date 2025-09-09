@@ -60,14 +60,19 @@ def main() -> int:
     if not root.exists():
         print(f"[ingest] root not found: {root}", file=sys.stderr)
         return 1
-    files = [p for p in root.rglob("*.pdf") if p.is_file()]
-    if not files:
-        print("[ingest] No PDF files to process.")
+    pdf_files = [p for p in root.rglob("*.pdf") if p.is_file()]
+    image_files = [
+        p for p in root.rglob("*")
+        if p.is_file() and p.suffix.lower() in IMAGE_EXTS and "/processed/" not in str(p)
+    ]
+    if not pdf_files and not image_files:
+        print("[ingest] No PDF or image files to process.")
         return 0
     processed_dir = root / "processed"
     processed_dir.mkdir(parents=True, exist_ok=True)
 
-    for pdf in sorted(files):
+    # 1) Handle PDFs → pages → images → OCR
+    for pdf in sorted(pdf_files):
         # Compute sha for stable ocr dir and naming
         h = hashlib.sha256()
         with open(pdf, "rb") as f:
@@ -98,9 +103,14 @@ def main() -> int:
             cmd.append("--dry-run")
         subprocess.run(cmd, check=True)
 
+        if args.dry_run:
+            # Show planned OCR on pages
+            subprocess.run(["ocr-image", str(pages_dir), "--dry-run"], check=False)
+            continue
+
         if not args.dry_run:
             success = False
-            # Always run OCR over rendered pages (tesseract available in image)
+            # Always run OCR over rendered pages
             try:
                 subprocess.run(["ocr-image", str(pages_dir)], check=True)
             except subprocess.CalledProcessError as e:
@@ -141,6 +151,31 @@ def main() -> int:
                 dest = processed_dir / pdf.name
                 shutil.move(str(pdf), str(dest))
                 print(f"[ingest] moved source -> {dest}")
+
+    # 2) Handle standalone image files → move into images → OCR
+    if image_files:
+        print(f"[ingest] Found {len(image_files)} image(s) to move and OCR.")
+    for img in sorted(image_files):
+        # Derive destination name based on content sha
+        h = hashlib.sha256(img.read_bytes()).hexdigest()
+        dest = Path(args.images_dir) / f"scan-{h[:16]}{img.suffix.lower()}"
+        if args.dry_run:
+            print(f"[ingest] would move {img} -> {dest}")
+            subprocess.run(["ocr-image", str(dest), "--dry-run"], check=False)
+        else:
+            Path(args.images_dir).mkdir(parents=True, exist_ok=True)
+            shutil.move(str(img), str(dest))
+            try:
+                subprocess.run(["ocr-image", str(dest)], check=True)
+            except subprocess.CalledProcessError as e:
+                print(f"[ingest] OCR failed for {dest}: {e}")
+        # Optionally mark/move processed originals
+        if args.move_processed and not args.dry_run:
+            # If original still exists (e.g., we copied, not moved), move it
+            if img.exists():
+                destp = processed_dir / img.name
+                destp.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(img), str(destp))
 
     print("[ingest] Done.")
     return 0

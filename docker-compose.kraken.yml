@@ -1,0 +1,16 @@
+version: "3.9"
+
+services:
+  kraken:
+    build:
+      context: .
+      dockerfile: infra/kraken/Dockerfile
+    environment:
+      - MODELS_DIR=/data/models
+    volumes:
+      - ./volumes:/data
+      - .:/work
+    # Enable GPU access via NVIDIA Container Toolkit
+    gpus: all
+    working_dir: /work
+    command: ["kraken", "--version"]

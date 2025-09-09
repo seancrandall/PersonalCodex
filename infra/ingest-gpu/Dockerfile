@@ -15,7 +15,8 @@ pip install --no-cache-dir \
   "transformers>=4.41,<5" \
   sentencepiece \
   "opencv-python-headless>=4.8" \
-  Pillow torchvision
+  Pillow torchvision \
+  requests
 # Ensure non-headless OpenCV is not present (eliminate libGL runtime need)
 python - <<'PY'
 import sys, subprocess

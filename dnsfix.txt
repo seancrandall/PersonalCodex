@@ -1,0 +1,104 @@
+Skip to content
+Chat history
+You said:
+Dockerfile
+File
+Having a frustrating issue here. I am trying to containerize a lot of my workflows, and any time I try to build anything based from pythorch or the nvidia-cuda images, I get DNS resolution errors when my Dockerfile tries to install packages.
+ChatGPT said:
+
+Ugh—yeah, this combo (Fedora 42 + BuildKit + CUDA/PyTorch bases) is a perfect storm for flaky DNS during docker build. Here’s a tight, fix-first checklist that reliably cures it on Fedora:
+1) Give Docker a stable resolver (daemon-wide)
+
+Tell the Docker daemon which nameservers to use (builds use the daemon’s DNS, not your container args).
+
+sudo mkdir -p /etc/docker
+sudo tee /etc/docker/daemon.json >/dev/null <<'JSON'
+{
+  "dns": ["192.168.1.1", "1.1.1.1", "8.8.8.8"],
+  "dns-opts": ["edns0"],
+  "dns-search": []
+}
+JSON
+sudo systemctl restart docker
+
+    Docker supports dns, dns-opts, and dns-search in daemon.json; builds inherit these.
+    Docker Documentation
+    dockerlabs
+
+    If you prefer to keep BuildKit on (recommended), the rest of this list makes it play nicely.
+
+2) Tell BuildKit which DNS to use (the missing piece)
+
+BuildKit can ignore host/network settings and pick up /run/systemd/resolve/resolv.conf, which bites on Fedora/systemd-resolved setups. Add a BuildKit config with explicit DNS:
+
+# rootful buildkit
+sudo mkdir -p /etc/buildkit
+sudo tee /etc/buildkit/buildkitd.toml >/dev/null <<'TOML'
+[dns]
+  nameservers = ["192.168.1.1", "1.1.1.1", "8.8.8.8"]
+  options = ["edns0"]
+  searchDomains = []
+TOML
+
+# restart Docker (buildkitd runs under it on Engine installs)
+sudo systemctl restart docker
+
+    BuildKit does have a [dns] block in /etc/buildkit/buildkitd.toml; set nameservers/options/searchDomains explicitly.
+    Docker Documentation
+
+    There’s a long-standing issue where BuildKit keeps using systemd’s resolver even with --network=host; this TOML sidesteps it.
+    GitHub
+
+3) Keep using RUN --network=host for apt/pip steps
+
+You’re already doing this (good!). BuildKit honors it for network access, but it won’t fix DNS alone—hence step 2.
+GitHub
+4) Work around NVIDIA/CUDA repo flakiness during apt
+
+The CUDA base images ship extra .list files and their keys occasionally break, which can look like DNS problems. Two pragmatic tweaks inside your Dockerfile:
+
+# disable NVIDIA lists during OS setup to avoid GPG/availability churn
+RUN --network=host <<'SH'
+set -eux
+tmp=/tmp/apt-disabled; mkdir -p "$tmp"
+for f in /etc/apt/sources.list.d/*cuda*.list /etc/apt/sources.list.d/*nvidia*.list; do
+  [ -e "$f" ] && mv "$f" "$tmp"/
+done
+printf 'Acquire::Retries "3"; Acquire::ForceIPv4 "true";\n' >/etc/apt/apt.conf.d/99-retries-ipv4
+apt-get update
+SH
+
+    NVIDIA apt repos/keys regularly cause apt update failures unrelated to your LAN DNS; disabling their lists during base OS install avoids that failure mode.
+    NVIDIA Developer Forums+1
+    GitHub
+
+5) Quick sanity checks & toggles
+
+    Does DNS now work during builds?
+    docker buildx build --progress=plain . (watch for apt-get update resolving hosts). If it still fails, temporarily disable BuildKit to isolate:
+    DOCKER_BUILDKIT=0 docker build . — if it succeeds, the TOML or daemon DNS wasn’t picked up yet.
+    Stack Overflow
+
+    Confirm daemon picked your DNS:
+    docker info | sed -n '/DNS:/,$p' (should list the nameservers you set). Docs: daemon options live in daemon.json.
+    Docker Documentation+1
+
+    Fedora/systemd-resolved context: Docker avoids using 127.0.0.53 directly (the stub); forcing explicit nameservers is the right approach here.
+    Super User
+
+6) Minimal test that matches your images
+
+Before a long build, verify DNS inside the exact base you use:
+
+docker run --rm -it --dns 1.1.1.1 nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04 bash -lc 'apt-get update -qq && getent hosts deb.debian.org || true'
+
+    Docker’s DNS flags affect run, but builds still take DNS from the daemon/BuildKit configs above—use this only as a smoke test.
+    Docker Documentation
+    Stack Overflow
+
+If you want, paste the exact apt error string you’re seeing (DNS timeout vs. “NO_PUBKEY”/GPG vs. 404). DNS timeouts point to steps 1–3; GPG/public key errors point to step 4.
+
+(Reference docs for each knob above in case you need to justify the changes internally: Docker daemon DNS/daemon.json, BuildKit TOML with [dns], and notes on BuildKit networking behavior with systemd-resolved.)
+
+
+ChatGPT can make mistakes. Check important info.
