@@ -58,6 +58,10 @@ def main() -> int:
 
     # Emit a small manifest next to pages dir
     manifest = {"prefix": prefix, "sha": sha, "images": moved}
+    if args.source:
+        src_base = Path(args.source).name
+        manifest["source"] = str(args.source)
+        manifest["source_basename"] = src_base
     with open(pages_dir.parent / "moved_images.json", "w", encoding="utf-8") as f:
         json.dump(manifest, f, ensure_ascii=False, indent=2)
     print(f"[move-images] moved {len(moved)} images with prefix {prefix}")
@@ -66,4 +70,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

@@ -145,7 +145,20 @@ def main() -> int:
                 args.images_dir,
             ], check=True)
 
-            # 4) mark done and move source
+            # 4) write notes DB
+            manifest = ocr_root / "moved_images.json"
+            if manifest.exists():
+                subprocess.run([
+                    "notesdb-write",
+                    "--db",
+                    args.notes_db,
+                    "--manifest",
+                    str(manifest),
+                    "--images-dir",
+                    args.images_dir,
+                ], check=True)
+
+            # 5) mark done and move source
             done_marker.write_text("ok", encoding="utf-8")
             if args.move_processed:
                 dest = processed_dir / pdf.name
@@ -169,6 +182,20 @@ def main() -> int:
                 subprocess.run(["ocr-image", str(dest)], check=True)
             except subprocess.CalledProcessError as e:
                 print(f"[ingest] OCR failed for {dest}: {e}")
+            else:
+                # Persist into notes DB as a single-page note
+                try:
+                    subprocess.run([
+                        "notesdb-write",
+                        "--db",
+                        args.notes_db,
+                        "--paths",
+                        str(dest),
+                        "--original-name",
+                        img.name,
+                    ], check=True)
+                except subprocess.CalledProcessError as e:
+                    print(f"[ingest] notesdb-write failed for {dest}: {e}")
         # Optionally mark/move processed originals
         if args.move_processed and not args.dry_run:
             # If original still exists (e.g., we copied, not moved), move it

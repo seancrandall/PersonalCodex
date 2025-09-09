@@ -1,0 +1,207 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sqlite3
+from contextlib import closing
+from pathlib import Path
+from typing import List, Dict, Any, Optional, Tuple
+
+
+def natural_key(s: str) -> List[Any]:
+    import re
+    return [int(text) if text.isdigit() else text.lower() for text in re.split(r"(\d+)", s)]
+
+
+def open_db(path: str) -> sqlite3.Connection:
+    conn = sqlite3.connect(path)
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute("PRAGMA busy_timeout=5000")
+    return conn
+
+
+def ensure_note_by_source(conn: sqlite3.Connection, source_key: str, title: Optional[str] = None) -> int:
+    cur = conn.execute("SELECT note_id FROM note_source WHERE source_key = ?", (source_key,))
+    row = cur.fetchone()
+    if row:
+        return int(row[0])
+    # Create a new note and map
+    cur = conn.execute(
+        "INSERT INTO note(title) VALUES (?)",
+        (title or source_key,),
+    )
+    note_id = int(cur.lastrowid)
+    conn.execute(
+        "INSERT OR IGNORE INTO note_source(note_id, source_key) VALUES (?, ?)",
+        (note_id, source_key),
+    )
+    return note_id
+
+
+def upsert_file(conn: sqlite3.Connection, path: str, original_filename: Optional[str], ocr_txt: Optional[str], ocr_json: Optional[str]) -> int:
+    # Set original_filename only if inserting or currently NULL
+    conn.execute(
+        """
+        INSERT INTO file(path, original_filename, ocr_text_path, ocr_json_path)
+        VALUES(?, ?, ?, ?)
+        ON CONFLICT(path) DO UPDATE SET
+            ocr_text_path=excluded.ocr_text_path,
+            ocr_json_path=excluded.ocr_json_path,
+            original_filename=COALESCE(file.original_filename, excluded.original_filename)
+        """,
+        (path, original_filename, ocr_txt, ocr_json),
+    )
+    cur = conn.execute("SELECT id FROM file WHERE path = ?", (path,))
+    return int(cur.fetchone()[0])
+
+
+def upsert_note_file(conn: sqlite3.Connection, note_id: int, file_id: int, page_order: int) -> None:
+    conn.execute(
+        """
+        INSERT INTO note_file(note_id, file_id, page_order)
+        VALUES (?, ?, ?)
+        ON CONFLICT(note_id, file_id) DO UPDATE SET
+            page_order=excluded.page_order
+        """,
+        (note_id, file_id, page_order),
+    )
+
+
+def upsert_transcribed_page(conn: sqlite3.Connection, note_id: int, file_id: Optional[int], page_order: int, text: str, json_path: Optional[str]) -> int:
+    conn.execute(
+        """
+        INSERT INTO transcribed_page(note_id, file_id, page_order, text, json_path)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(note_id, page_order) DO UPDATE SET
+            text=excluded.text,
+            json_path=excluded.json_path,
+            file_id=COALESCE(transcribed_page.file_id, excluded.file_id)
+        """,
+        (note_id, file_id, page_order, text, json_path),
+    )
+    cur = conn.execute("SELECT id FROM transcribed_page WHERE note_id=? AND page_order=?", (note_id, page_order))
+    return int(cur.fetchone()[0])
+
+
+def set_prev_next_for_note(conn: sqlite3.Connection, note_id: int) -> None:
+    # Derive links from page_order for both note_file and transcribed_page
+    rows = conn.execute(
+        "SELECT file_id, page_order FROM note_file WHERE note_id=? ORDER BY page_order ASC, file_id ASC",
+        (note_id,),
+    ).fetchall()
+    for i, (fid, _ord) in enumerate(rows):
+        prev_f = rows[i - 1][0] if i > 0 else None
+        next_f = rows[i + 1][0] if i + 1 < len(rows) else None
+        conn.execute(
+            "UPDATE note_file SET prev_file_id=?, next_file_id=? WHERE note_id=? AND file_id=?",
+            (prev_f, next_f, note_id, fid),
+        )
+    trows = conn.execute(
+        "SELECT id FROM transcribed_page WHERE note_id=? ORDER BY page_order ASC, id ASC",
+        (note_id,),
+    ).fetchall()
+    for i, (tid,) in enumerate(trows):
+        prev_t = trows[i - 1][0] if i > 0 else None
+        next_t = trows[i + 1][0] if i + 1 < len(trows) else None
+        conn.execute(
+            "UPDATE transcribed_page SET prev_id=?, next_id=? WHERE id=?",
+            (prev_t, next_t, tid),
+        )
+
+
+def ingest_from_manifest(conn: sqlite3.Connection, manifest_path: Path, images_dir: Path) -> Tuple[int, int]:
+    data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    prefix = data.get("prefix")
+    source_basename = data.get("source_basename")
+    source_key = prefix  # stable per source PDF batch
+    note_id = ensure_note_by_source(conn, source_key=source_key, title=source_basename)
+    # Build ordered list
+    entries = sorted(data.get("images", []), key=lambda e: natural_key(Path(e.get("dest", "")).name))
+    updated = 0
+    for idx, entry in enumerate(entries, start=1):
+        dest = Path(entry.get("dest"))
+        img_path = dest if dest.is_absolute() else (images_dir / dest.name)
+        txt_path = img_path.with_suffix(".txt")
+        json_path = img_path.with_suffix(".ocr.json")
+        text = txt_path.read_text(encoding="utf-8") if txt_path.exists() else ""
+        file_id = upsert_file(
+            conn,
+            path=str(img_path),
+            original_filename=source_basename,
+            ocr_txt=str(txt_path) if txt_path.exists() else None,
+            ocr_json=str(json_path) if json_path.exists() else None,
+        )
+        upsert_note_file(conn, note_id, file_id, page_order=idx)
+        upsert_transcribed_page(conn, note_id, file_id, page_order=idx, text=text, json_path=str(json_path) if json_path.exists() else None)
+        # Mark processed if we have text
+        if text.strip():
+            conn.execute("UPDATE file SET fully_processed=1 WHERE id=?", (file_id,))
+        updated += 1
+    set_prev_next_for_note(conn, note_id)
+    return note_id, updated
+
+
+def ingest_from_paths(conn: sqlite3.Connection, paths: List[Path], original_name: Optional[str]) -> Tuple[int, int]:
+    # Group by stem-based source key per file
+    total = 0
+    last_note_id = 0
+    for img in paths:
+        images_dir = img.parent
+        stem = img.stem
+        source_key = stem
+        note_id = ensure_note_by_source(conn, source_key=source_key, title=original_name or stem)
+        txt_path = img.with_suffix(".txt")
+        json_path = img.with_suffix(".ocr.json")
+        text = txt_path.read_text(encoding="utf-8") if txt_path.exists() else ""
+        file_id = upsert_file(
+            conn,
+            path=str(img),
+            original_filename=original_name or img.name,
+            ocr_txt=str(txt_path) if txt_path.exists() else None,
+            ocr_json=str(json_path) if json_path.exists() else None,
+        )
+        # page_order fixed to 1 for single-file notes
+        upsert_note_file(conn, note_id, file_id, page_order=1)
+        upsert_transcribed_page(conn, note_id, file_id, page_order=1, text=text, json_path=str(json_path) if json_path.exists() else None)
+        if text.strip():
+            conn.execute("UPDATE file SET fully_processed=1 WHERE id=?", (file_id,))
+        set_prev_next_for_note(conn, note_id)
+        total += 1
+        last_note_id = note_id
+    return last_note_id, total
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description="Write OCR results into notes.db and link pages")
+    ap.add_argument("--db", default=os.environ.get("NOTES_DB", "/data/notesdb/notes.db"))
+    ap.add_argument("--manifest", help="Path to moved_images.json for a PDF batch")
+    ap.add_argument("--paths", nargs="*", help="Image paths to ingest (standalone images)")
+    ap.add_argument("--images-dir", default=os.environ.get("IMAGES_DIR", "/data/images"))
+    ap.add_argument("--original-name", help="Original filename (for standalone images)")
+    ap.add_argument("--dry-run", action="store_true")
+    args = ap.parse_args()
+
+    conn = open_db(args.db)
+    note_id = 0
+    count = 0
+    try:
+        with conn:
+            if args.manifest:
+                note_id, count = ingest_from_manifest(conn, Path(args.manifest), Path(args.images_dir))
+            if args.paths:
+                n2, c2 = ingest_from_paths(conn, [Path(p) for p in args.paths], args.original_name)
+                note_id = note_id or n2
+                count += c2
+        print(f"[notesdb-write] committed note_id={note_id}, items={count}")
+    finally:
+        conn.close()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+

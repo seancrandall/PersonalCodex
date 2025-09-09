@@ -11,6 +11,7 @@ BEGIN;
 CREATE TABLE IF NOT EXISTS file (
     id              INTEGER PRIMARY KEY,
     path            TEXT NOT NULL UNIQUE, -- container-absolute path (/data/images/...)
+    original_filename TEXT,               -- original name at import time (basename)
     sha256          TEXT UNIQUE,
     width_px        INTEGER,
     height_px       INTEGER,
@@ -166,6 +167,15 @@ CREATE TABLE IF NOT EXISTS block_tag (
     note_block_id   INTEGER NOT NULL REFERENCES note_block(id) ON DELETE CASCADE,
     tag_id          INTEGER NOT NULL REFERENCES tag(id) ON DELETE CASCADE,
     PRIMARY KEY (note_block_id, tag_id)
+);
+
+-- ===============================
+-- Note Source (stable mapping from import source to note_id)
+-- ===============================
+CREATE TABLE IF NOT EXISTS note_source (
+    note_id         INTEGER NOT NULL REFERENCES note(id) ON DELETE CASCADE,
+    source_key      TEXT NOT NULL UNIQUE,
+    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
 -- ===============================

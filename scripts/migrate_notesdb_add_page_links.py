@@ -97,6 +97,40 @@ def ensure_file_processed_flag(conn: sqlite3.Connection) -> None:
         )
 
 
+def ensure_original_filename_and_backfill(conn: sqlite3.Connection) -> None:
+    with conn:
+        c = conn.cursor()
+        c.execute("PRAGMA table_info(file)")
+        cols = [row[1] for row in c.fetchall()]
+        if "original_filename" not in cols:
+            c.execute("ALTER TABLE file ADD COLUMN original_filename TEXT")
+        # Backfill from basename(path) where NULL
+        # Use Python to compute basenames reliably
+        c = conn.cursor()
+        c.execute("SELECT id, path FROM file WHERE original_filename IS NULL OR original_filename = ''")
+        rows = c.fetchall()
+        if rows:
+            import os
+            for fid, p in rows:
+                base = os.path.basename(p) if p else None
+                if base:
+                    conn.execute("UPDATE file SET original_filename = ? WHERE id = ?", (base, fid))
+
+
+def ensure_note_source_table(conn: sqlite3.Connection) -> None:
+    with conn:
+        c = conn.cursor()
+        c.execute(
+            """
+            CREATE TABLE IF NOT EXISTS note_source (
+                note_id    INTEGER NOT NULL REFERENCES note(id) ON DELETE CASCADE,
+                source_key TEXT NOT NULL UNIQUE,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--db", required=True, help="Path to notes.db")
@@ -107,6 +141,8 @@ def main() -> None:
         ensure_note_file_links(conn)
         ensure_transcribed_page(conn)
         ensure_file_processed_flag(conn)
+        ensure_original_filename_and_backfill(conn)
+        ensure_note_source_table(conn)
     print("Migration complete: linked-list columns and transcribed_page ensured.")
 
 
