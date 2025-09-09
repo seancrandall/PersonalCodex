@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.7
-FROM pytorch/pytorch:2.6.0-cuda12.1-cudnn9-runtime
+FROM pytorch/pytorch:2.6.0-cuda12.4-cudnn9-devel
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
