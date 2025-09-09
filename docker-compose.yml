@@ -36,8 +36,10 @@ services:
     environment:
       - PATH=/opt/conda/bin:/data/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
       - MOVE_PROCESSED=1
-      - OCR_ENGINE=${OCR_ENGINE:-trocr}
+      - OCR_ENGINE=${OCR_ENGINE:-openai}
       - TROCR_MODEL_ID=${TROCR_MODEL_ID:-microsoft/trocr-large-handwritten}
+      - OPENAI_OCR_MODEL=${OPENAI_OCR_MODEL:-gpt-5-mini}
+      - OPENAI_OCR_FALLBACK_MODEL=${OPENAI_OCR_FALLBACK_MODEL:-gpt-4o-mini}
       - HF_HOME=/data/models
       - CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-all}
       - NEWDATA_DIR=/data/newdata
@@ -45,8 +47,10 @@ services:
       - OCR_DIR=/data/ocr
       - NOTES_DB=/data/notesdb/notes.db
       - STANDARD_WORKS_DB=/data/scripdb/standardworks.db
+      - OPENAI_API_KEY_FILE=/run/secrets/openai.key
     volumes:
       - ./volumes:/data
+      - ./volumes/openai.key:/run/secrets/openai.key:ro
     working_dir: /
     entrypoint: ["/bin/sh", "-lc"]
     command: "newdata-ingest"
