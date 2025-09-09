@@ -447,7 +447,7 @@ def _read_openai_key() -> str | None:
     return None
 
 
-def _openai_vision_ocr(image_path: Path, api_key: str, model: str = "gpt-5-mini") -> str:
+def _openai_vision_ocr(image_path: Path, api_key: str, model: str = "gpt-4o-mini") -> str:
     import requests
 
     img_b64 = base64.b64encode(image_path.read_bytes()).decode("ascii")
@@ -500,7 +500,7 @@ def process_path_with_openai(path: Path) -> int:
     else:
         images = [path]
     count = 0
-    model = os.environ.get("OPENAI_OCR_MODEL", "gpt-5-mini")
+    model = os.environ.get("OPENAI_OCR_MODEL", "gpt-4o-mini")
     fb_model = os.environ.get("OPENAI_OCR_FALLBACK_MODEL", "gpt-4o-mini")
     delay_s = float(os.environ.get("OPENAI_OCR_DELAY_S", "0.0"))
     for img in images:

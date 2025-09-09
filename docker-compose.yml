@@ -38,7 +38,7 @@ services:
       - MOVE_PROCESSED=1
       - OCR_ENGINE=${OCR_ENGINE:-openai}
       - TROCR_MODEL_ID=${TROCR_MODEL_ID:-microsoft/trocr-large-handwritten}
-      - OPENAI_OCR_MODEL=${OPENAI_OCR_MODEL:-gpt-5-mini}
+      - OPENAI_OCR_MODEL=${OPENAI_OCR_MODEL:-gpt-4o-mini}
       - OPENAI_OCR_FALLBACK_MODEL=${OPENAI_OCR_FALLBACK_MODEL:-gpt-4o-mini}
       - HF_HOME=/data/models
       - CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-all}
