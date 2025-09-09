@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 """
 Scan /data/newdata for inputs and run the PDF → pages → blocks → images → markdown pipeline.
 
