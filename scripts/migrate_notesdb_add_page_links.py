@@ -73,6 +73,11 @@ def ensure_transcribed_page(conn: sqlite3.Connection) -> None:
             )
             """
         )
+        # Ensure page_date column exists for older DBs
+        c.execute("PRAGMA table_info(transcribed_page)")
+        cols = [row[1] for row in c.fetchall()]
+        if "page_date" not in cols:
+            c.execute("ALTER TABLE transcribed_page ADD COLUMN page_date TEXT")
         # Indexes
         c.execute(
             "CREATE INDEX IF NOT EXISTS idx_transcribed_page_note_order ON transcribed_page(note_id, page_order)"
