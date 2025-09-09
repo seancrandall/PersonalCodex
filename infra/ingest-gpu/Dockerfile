@@ -14,6 +14,12 @@ pip install --no-cache-dir \
   "python-doctr[torch]==0.9.0" \
   "opencv-python-headless>=4.8" \
   Pillow torchvision
+# Ensure non-headless OpenCV is not present (eliminate libGL runtime need)
+python - <<'PY'
+import sys, subprocess
+# Try to remove opencv-python if it got pulled as a dependency
+subprocess.run([sys.executable, '-m', 'pip', 'uninstall', '-y', 'opencv-python'], check=False)
+PY
 SH
 
 WORKDIR /
