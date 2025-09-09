@@ -81,6 +81,22 @@ def ensure_transcribed_page(conn: sqlite3.Connection) -> None:
         )
 
 
+def ensure_file_processed_flag(conn: sqlite3.Connection) -> None:
+    with conn:
+        c = conn.cursor()
+        # Add boolean-like processed flag if missing
+        c.execute("PRAGMA table_info(file)")
+        cols = [row[1] for row in c.fetchall()]
+        if "fully_processed" not in cols:
+            c.execute(
+                "ALTER TABLE file ADD COLUMN fully_processed INTEGER NOT NULL DEFAULT 0 CHECK (fully_processed IN (0,1))"
+            )
+        # Optional: index to quickly find unprocessed files
+        c.execute(
+            "CREATE INDEX IF NOT EXISTS idx_file_fully_processed ON file(fully_processed)"
+        )
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--db", required=True, help="Path to notes.db")
@@ -90,9 +106,9 @@ def main() -> None:
         conn.execute("PRAGMA foreign_keys=ON")
         ensure_note_file_links(conn)
         ensure_transcribed_page(conn)
+        ensure_file_processed_flag(conn)
     print("Migration complete: linked-list columns and transcribed_page ensured.")
 
 
 if __name__ == "__main__":
     main()
-

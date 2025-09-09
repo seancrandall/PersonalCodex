@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS file (
     captured_at     DATETIME,
     ocr_text_path   TEXT,
     ocr_json_path   TEXT,
+    fully_processed INTEGER NOT NULL DEFAULT 0 CHECK (fully_processed IN (0,1)),
     created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
