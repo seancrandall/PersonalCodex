@@ -74,3 +74,23 @@
 - All runtime/ingestion scripts should live under `volumes/bin/` in the repo and are mounted into containers at `/data/bin/`.
 - Ensure `/data/bin` is on the PATH for containers that need these tools (compose already sets this for `api` and `ingest`).
 - Keep orchestrators thin (dispatch, logging, idempotency) and delegate heavy lifting to dedicated subcommands.
+
+### Network/DNS with CUDA and PyTorch images
+CUDA and PyTorch base images frequently hit DNS/apt flakiness on Fedora/systemd‑resolved hosts. Use a 2‑layer approach:
+
+- Host/daemon (one‑time):
+  - Set daemon DNS in `/etc/docker/daemon.json` (nameservers, dns‑opts). Restart Docker.
+  - Configure BuildKit DNS in `/etc/buildkit/buildkitd.toml`:
+    - `[dns] nameservers=["<router>", "1.1.1.1", "8.8.8.8"], options=["edns0"], searchDomains=[]`
+  - Sanity: `docker info` should list your DNS. If builds still fail, try `DOCKER_BUILDKIT=0 docker build` to isolate BuildKit config.
+
+- Inside Dockerfiles (container‑level):
+  - Wrap apt/pip blocks in `RUN --network=host <<'SH' ... SH` to bypass BuildKit’s network isolation.
+  - Before `apt-get update`, temporarily disable NVIDIA/CUDA apt lists (they often cause non‑DNS failures):
+    - Move `/etc/apt/sources.list.d/*cuda*.list` and `*nvidia*.list` aside, add `/etc/apt/apt.conf.d/99-retries-ipv4` with `Acquire::Retries "3"; Acquire::ForceIPv4 "true";`.
+  - Prefer pip wheels: `pip install --only-binary :all: <pkgs>` to avoid source builds during container build.
+  - If using conda‑based images, ensure PATH includes `/opt/conda/bin` so `/usr/bin/env python` resolves (compose can set this).
+  - For OpenCV in headless containers, install `opencv-python-headless` (not `opencv-python`) to avoid GL/GUI deps; add `libgl1` only if required.
+  - For quick DNS smoke tests, run: `docker run --rm --dns 1.1.1.1 <base> bash -lc 'apt-get update -qq && getent hosts deb.debian.org || true'`.
+
+These patterns are already applied to our Dockerfiles (backend and ingest) to stabilize builds on Fedora. See `dnsfix.txt` for the original checklist and references.
