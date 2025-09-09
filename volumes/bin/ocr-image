@@ -277,33 +277,59 @@ def process_path_with_trocr(path: Path, model_id: str | None = None, device: str
     else:
         images = [path]
     count = 0
+    segment_mode = (os.environ.get("TROCR_SEGMENT", "page").strip().lower() or "page")
+    max_tokens = int(os.environ.get("TROCR_MAX_TOKENS", "512"))
+    line_height = int(os.environ.get("TROCR_LINE_HEIGHT", "48"))
     for img_path in images:
         img_bgr = cv2.imread(str(img_path))
         if img_bgr is None:
             print(f"[ocr-image] failed to read image {img_path}")
             continue
         h, w = img_bgr.shape[:2]
-        line_boxes = _segment_lines_opencv(img_bgr)
         blocks: List[Dict[str, Any]] = []
-        for (x0, y0, x1, y1) in line_boxes:
-            crop = img_bgr[max(0, y0):min(h, y1), max(0, x0):min(w, x1)]
-            if crop.size == 0:
-                continue
-            pil = Image.fromarray(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB))
+        if segment_mode == "page":
+            # Recognize the whole page as a single block; simplest path to get text quickly
+            pil = Image.fromarray(cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB))
             try:
-                inputs = processor(images=pil, return_tensors="pt").to(device_t)
+                inputs = processor(images=pil, return_tensors="pt", do_convert_rgb=True).to(device_t)
                 with torch.inference_mode():
-                    generated = model.generate(**inputs, max_new_tokens=80)
+                    generated = model.generate(**inputs, max_new_tokens=max_tokens)
                 text = processor.batch_decode(generated, skip_special_tokens=True)[0]
             except Exception as e:
-                print(f"[ocr-image] trocr inference failed on {img_path}: {e}")
-                continue
+                print(f"[ocr-image] trocr page inference failed on {img_path}: {e}")
+                text = ""
             blocks.append({
-                "bbox": [float(x0), float(y0), float(x1), float(y1)],
-                "content": text.strip(),
-                "block_type": "line",
+                "bbox": [0.0, 0.0, float(w), float(h)],
+                "content": (text or "").strip(),
+                "block_type": "paragraph",
                 "confidence": None,
             })
+        else:
+            # Line segmentation path (fallback)
+            line_boxes = _segment_lines_opencv(img_bgr)
+            for (x0, y0, x1, y1) in line_boxes:
+                crop = img_bgr[max(0, y0):min(h, y1), max(0, x0):min(w, x1)]
+                if crop.size == 0:
+                    continue
+                # Normalize to target line height
+                scale = line_height / max(1, crop.shape[0])
+                if scale != 1.0:
+                    crop = cv2.resize(crop, (max(1, int(crop.shape[1] * scale)), line_height), interpolation=cv2.INTER_LINEAR)
+                pil = Image.fromarray(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB))
+                try:
+                    inputs = processor(images=pil, return_tensors="pt", do_convert_rgb=True).to(device_t)
+                    with torch.inference_mode():
+                        generated = model.generate(**inputs, max_new_tokens=min(120, max_tokens))
+                    text = processor.batch_decode(generated, skip_special_tokens=True)[0]
+                except Exception as e:
+                    print(f"[ocr-image] trocr line inference failed on {img_path}: {e}")
+                    continue
+                blocks.append({
+                    "bbox": [float(x0), float(y0), float(x1), float(y1)],
+                    "content": text.strip(),
+                    "block_type": "line",
+                    "confidence": None,
+                })
         json_path = img_path.with_suffix(".ocr.json")
         txt_path = img_path.with_suffix(".txt")
         txt = "\n".join([b["content"] for b in blocks if b.get("content")]) + "\n"
