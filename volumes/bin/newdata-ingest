@@ -1,11 +1,11 @@
 #!/usr/bin/env python
 """
-Scan /data/newdata for inputs and run the PDF → pages → blocks → images → markdown pipeline.
+Scan /data/newdata for inputs and run the PDF → pages → text → images → markdown pipeline.
 
 Modular steps (PDFs first):
-- pdf-to-pages: per-page PNG + blocks metadata under /data/ocr/<sha>/
+- pdf-to-pages: per-page PNG + blocks metadata under /data/txt/<sha>/
 - move-images: move PNGs to /data/images with canonical names
-- assemble-md: build a single Markdown file from blocks JSON
+- assemble-md: build a single Markdown file from OCR/blocks JSON under /data/txt/<sha>
 - move source PDF to /data/newdata/processed
 """
 from __future__ import annotations

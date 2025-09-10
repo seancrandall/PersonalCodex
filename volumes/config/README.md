@@ -10,6 +10,5 @@ Notes
 Files
 - preferences.json: UI preferences (theme, font sizing, display toggles).
 - ocr.json: OCR defaults (engine, models, languages).
-- ingest.json: Ingest pipeline behavior and paths.
+- ingest.json: Ingest pipeline behavior and paths. TXT is the canonical output root (/data/txt); OCR_DIR is deprecated.
 - app.json: App-level settings and feature flags.
-

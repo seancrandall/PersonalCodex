@@ -3,7 +3,7 @@
     "newdataDir": "/data/newdata",
     "imagesDir": "/data/images",
     "txtDir": "/data/txt",
-    "ocrDir": "/data/ocr",
+    
     "notesDb": "/data/notesdb/notes.db",
     "standardWorksDb": "/data/scripdb/standardworks.db"
   },
@@ -18,4 +18,3 @@
     "aliases": "/data/scripdb/book_aliases.json"
   }
 }
-

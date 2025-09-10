@@ -30,11 +30,12 @@ def main() -> int:
     lines: list[str] = []
     lines.append(f"# OCR for {meta.get('source', '')}\n")
     for p in sorted(meta.get("pages", []), key=lambda x: x["page"]):
-        # Prefer OCR JSON if present next to the PNG
+        # Prefer OCR JSON under the provided OCR root (root/pages/<stem>.ocr.json)
         blocks_path = Path(p["blocks_json"]) if p.get("blocks_json") else None
-        ocr_json = Path(p["png"]).with_suffix(".ocr.json")
-        if ocr_json.exists():
-            jp = json.loads(ocr_json.read_text(encoding="utf-8"))
+        stem = Path(p.get("png", f"page-{p.get('page', 1):04d}.png")).stem
+        ocr_json_in_root = (root / "pages" / f"{stem}.ocr.json")
+        if ocr_json_in_root.exists():
+            jp = json.loads(ocr_json_in_root.read_text(encoding="utf-8"))
         elif blocks_path and blocks_path.exists():
             jp = json.loads(blocks_path.read_text(encoding="utf-8"))
         else:

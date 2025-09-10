@@ -45,7 +45,7 @@ services:
       - CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-all}
       - NEWDATA_DIR=/data/newdata
       - IMAGES_DIR=/data/images
-      - OCR_DIR=/data/ocr
+      - TXT_DIR=/data/txt
       - NOTES_DB=/data/notesdb/notes.db
       - STANDARD_WORKS_DB=/data/scripdb/standardworks.db
       - OPENAI_API_KEY_FILE=/run/secrets/openai.key
