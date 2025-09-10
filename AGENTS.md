@@ -60,7 +60,7 @@
 - Pin base images and package versions; avoid downloading model weights at build time—store them under `./volumes/models` and access via `/data/models`.
 
 ## Next Task: Scanned Files (OCR) – Guidance
-- Input/outputs: place scans under `volumes/scans/` (host) → `/data/scans/` (api). Write OCR artifacts to `volumes/ocr/` → `/data/ocr/` and persist extracted text to notes DB at `SQLITE_PATH`.
+- Input/outputs: place scans under `volumes/newdata/` (host) → `/data/newdata/` (ingest). Canonical text + per‑page OCR artifacts live under `volumes/txt/<sha>/` → `/data/txt/<sha>/`. Images live under `volumes/images/` → `/data/images/`. Do not write artifacts into `/data/ocr` anymore.
 - GPU usage: prefer CUDA models (Torch + OCR) when available; run on host or via Compose GPU override. Respect `MODELS_DIR=/data/models` for weights.
 - Suggested layout: add scripts under `scripts/` (e.g., `scripts/ocr_import.py`) or a `backend/personal_codex/ocr/` module if integrating with the API.
 - Conventions: process PDFs and images; chunk pages; emit per-page JSON and plain text; capture confidence and bounding boxes for future footnotes/citations.
@@ -70,6 +70,38 @@
 - Always first: ensure the git history is up to date. Before making any changes, snapshot all intentional, non-ephemeral workspace changes into a single commit (e.g., `chore(repo): snapshot workspace before agent changes`) so we can cleanly roll back if needed. Avoid committing generated artifacts (e.g., virtualenvs under `volumes/bin/.venv-*`, temporary outputs under `src/tmp/`, OCR caches, or large model files under `volumes/`). If such files are staged, unstage them before the snapshot.
 - Prefer dockerized workflows; avoid host-specific steps. If adding services, update `compose.yml` and document ports/env.
 - Keep patches minimal and aligned to the structure above; discuss major tooling changes in an issue first.
+
+### Agent Notes (Current Pipeline + Schema)
+- Canonical OCR/text root: `/data/txt/<sha>/` (env `TXT_DIR`).
+  - `pdf-to-pages` renders PNGs to `/data/txt/<sha>/pages/` and writes page metadata.
+  - `ocr-image` writes `page-XXXX.txt` and `page-XXXX.ocr.json` under `/data/txt/<sha>/pages/`.
+  - `move-images` moves PNGs to `/data/images` (images‑only directory).
+  - `assemble-md` emits Markdown to `/data/txt/<sha>/<prefix>-ocr.md` (not images/).
+- New note model (single level):
+  - `note(content, prev_note_id, next_note_id, date_created, date_created_precision, metadata_json, ...)`
+  - `note_file(note_id, file_id, page_order)` associates notes → images.
+  - `inputfile` + `note_inputfile` capture provenance of the original source (PDF/image/text).
+  - FTS: `note_fts` over `note.content` with triggers.
+  - Edit dates: `edit_date` + `note_edit_date` (trigger on `note.content` update).
+- Deprecated tables/fields: `note_block`, `block_*`, `note_block_link`, `transcribed_page`, `note.raw_text`.
+  - Scripts that referenced these have been made schema‑aware or no‑ops.
+- Date inference policy for imports and rebuild:
+  1) From note text head (first ~300 chars). Supports formats like `9 Sep. 2025`, `2025-09-09`, `Sep 9, 2025`.
+  2) If absent, inherit from previous up to 5 notes in sequence (PDF page chain).
+  3) Fallback to inputfile filename. Else leave null.
+  - Do not create edit/change dates during ingest.
+- Scripture linking: `notesdb-passages` parses `note.content` (falls back to `raw_text` when present) and links via `note_passage`.
+- Rebuild utility: `volumes/bin/rebuild_database.py` rebuilds `volumes/notesdb/notes.db` from `/data/txt`, `/data/images` (schema‑aware, uses `note` model, links prev/next, sets dates, links passages, links inputfile).
+
+### Ingest Configuration
+- Config root: `/data/config` (bind `volumes/config`)
+  - `ingest.json` paths: `newdataDir`, `imagesDir`, `txtDir`, `notesDb`, `standardWorksDb`.
+  - `ocr.json`: OCR engine/models/langs. Ingest maps these to env vars (e.g., `OPENAI_OCR_MODEL`, `TROCR_MODEL_ID`).
+  - Optional `recursive` flag (or `INGEST_RECURSIVE=1`) for recursive scanning; default is non‑recursive.
+
+### Git Hygiene
+- Ignore runtime data to avoid huge pushes: add/keep `.gitignore` entries for `volumes/images/`, `volumes/newdata/`, `volumes/notesdb/`, `volumes/txt/`, `volumes/ocr/`, `volumes/models/`, and any local venvs under `volumes/bin/.venv-*`.
+- If large files were accidentally committed, use `git filter-repo --invert-paths` to remove them from history, then force‑push.
 
 ### Modularity & Scripts
 - Prefer a practical, modular design: small, focused scripts and components that compose well. Avoid monoliths when a simple seam helps maintainability.
