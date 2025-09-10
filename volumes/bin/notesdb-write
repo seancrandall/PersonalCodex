@@ -44,6 +44,34 @@ def insert_note(conn: sqlite3.Connection, content: str) -> int:
     return int(cur.lastrowid)
 
 
+# --- Provenance: inputfile and junction ---
+def upsert_inputfile(conn: sqlite3.Connection, path: Path, original_filename: Optional[str] = None) -> int:
+    size = path.stat().st_size if path.exists() else None
+    media_type = None
+    try:
+        import mimetypes
+        media_type, _ = mimetypes.guess_type(str(path))
+    except Exception:
+        pass
+    conn.execute(
+        """
+        INSERT INTO inputfile(path, original_filename, size_bytes, media_type)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(path) DO UPDATE SET
+            original_filename=COALESCE(inputfile.original_filename, excluded.original_filename),
+            size_bytes=COALESCE(excluded.size_bytes, inputfile.size_bytes),
+            media_type=COALESCE(excluded.media_type, inputfile.media_type)
+        """,
+        (str(path), original_filename or path.name, size, media_type or "application/octet-stream"),
+    )
+    row = conn.execute("SELECT id FROM inputfile WHERE path=?", (str(path),)).fetchone()
+    return int(row[0])
+
+
+def link_note_inputfile(conn: sqlite3.Connection, note_id: int, inputfile_id: int) -> None:
+    conn.execute("INSERT OR IGNORE INTO note_inputfile(note_id, inputfile_id) VALUES (?, ?)", (note_id, inputfile_id))
+
+
 def infer_format_from_path(path: str) -> Optional[str]:
     ext = Path(path).suffix.lower()
     if ext == ".png":
@@ -117,10 +145,138 @@ def _find_txt_json_for_image(img_path: Path, sha: str | None = None) -> Tuple[Op
     return ((t2 if t2.exists() else None), (j2 if j2.exists() else None))
 
 
+# --- Date inference helpers ---
+MONTHS = {
+    "jan": 1, "january": 1,
+    "feb": 2, "february": 2,
+    "mar": 3, "march": 3,
+    "apr": 4, "april": 4,
+    "may": 5,
+    "jun": 6, "june": 6,
+    "jul": 7, "july": 7,
+    "aug": 8, "august": 8,
+    "sep": 9, "sept": 9, "september": 9,
+    "oct": 10, "october": 10,
+    "nov": 11, "november": 11,
+    "dec": 12, "december": 12,
+}
+import re as _re
+ISO_RE = _re.compile(r"\b(19\d{2}|20\d{2})[-/\.](0?[1-9]|1[0-2])[-/\.](0?[1-9]|[12]\d|3[01])\b")
+NUM_RE = _re.compile(r"\b(0?[1-9]|1[0-2])[\-\./_](0?[1-9]|[12]\d|3[01])[\-\./_](\d{2,4}|'\d{2}|’\d{2})\b")
+NAME1_RE = _re.compile(r"\b(\w{3,9})\.?,?\s+([0-3]?\d)(?:st|nd|rd|th)?(?:,)?\s+(\d{2,4}|'\d{2}|’\d{2})\b", _re.IGNORECASE)
+NAME2_RE = _re.compile(r"\b([0-3]?\d)(?:st|nd|rd|th)?\s+(\w{3,9})\.?,?\s+(\d{2,4}|'\d{2}|’\d{2})\b", _re.IGNORECASE)
+COMPACT_YMD_RE = _re.compile(r"\b(19\d{2}|20\d{2})(0[1-9]|1[0-2])([012]\d|3[01])\b")
+YM_ISO_RE = _re.compile(r"\b(19\d{2}|20\d{2})[-/\.](0?[1-9]|1[0-2])\b")
+MY_NAME_RE = _re.compile(r"\b(\w{3,9})\.?,?\s+(\d{2,4}|'\d{2}|’\d{2})\b", _re.IGNORECASE)
+Y_ONLY_RE = _re.compile(r"\b(19\d{2}|20\d{2})\b")
+
+
+def _pad(n: int) -> str:
+    return f"{n:02d}"
+
+
+def _normalize_year(y: int) -> int:
+    if y < 100:
+        return 2000 + y if y <= 49 else 1900 + y
+    return y
+
+
+def _valid_date(y: int, m: int, d: int) -> bool:
+    try:
+        import datetime as _dt
+        _dt.date(_normalize_year(y), m, d)
+        return True
+    except Exception:
+        return False
+
+
+def _parse_yy_fragment(val: str) -> int:
+    val = val.strip().lstrip("'").lstrip("’")
+    try:
+        return int(val)
+    except Exception:
+        return 0
+
+
+def parse_date_str(s: str):
+    if not s:
+        return None
+    m = ISO_RE.search(s)
+    if m:
+        y, mo, da = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        if _valid_date(y, mo, da):
+            return f"{_normalize_year(y)}-{_pad(mo)}-{_pad(da)}", "day"
+    m = NAME1_RE.search(s)
+    if m:
+        mon = MONTHS.get(m.group(1).lower().rstrip('.'))
+        if mon:
+            d = int(m.group(2))
+            y = _parse_yy_fragment(m.group(3))
+            if _valid_date(y, mon, d):
+                return f"{_normalize_year(y)}-{_pad(mon)}-{_pad(d)}", "day"
+    m = NAME2_RE.search(s)
+    if m:
+        d = int(m.group(1))
+        mon = MONTHS.get(m.group(2).lower().rstrip('.'))
+        y = _parse_yy_fragment(m.group(3))
+        if mon and _valid_date(y, mon, d):
+            return f"{_normalize_year(y)}-{_pad(mon)}-{_pad(d)}", "day"
+    m = NUM_RE.search(s)
+    if m:
+        mo, da, yfrag = int(m.group(1)), int(m.group(2)), _parse_yy_fragment(m.group(3))
+        y = yfrag
+        if _valid_date(y, mo, da):
+            return f"{_normalize_year(y)}-{_pad(mo)}-{_pad(da)}", "day"
+    m = COMPACT_YMD_RE.search(s)
+    if m:
+        y, mo, da = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        if _valid_date(y, mo, da):
+            return f"{_normalize_year(y)}-{_pad(mo)}-{_pad(da)}", "day"
+    m = YM_ISO_RE.search(s)
+    if m:
+        y, mo = int(m.group(1)), int(m.group(2))
+        if 1 <= mo <= 12:
+            return f"{_normalize_year(y)}-{_pad(mo)}-01", "month"
+    m = MY_NAME_RE.search(s)
+    if m:
+        mon = MONTHS.get(m.group(1).lower().rstrip('.'))
+        y = _parse_yy_fragment(m.group(2))
+        if mon and y:
+            return f"{_normalize_year(y)}-{_pad(mon)}-01", "month"
+    m = Y_ONLY_RE.search(s)
+    if m:
+        y = int(m.group(1))
+        return f"{_normalize_year(y)}-01-01", "year"
+    return None
+
+
+def set_note_date_ordered(conn: sqlite3.Connection, note_id: int, text: str, prev_note_ids: List[int], fallback_name: Optional[str]) -> None:
+    head = (text or "")[:300]
+    dprec = parse_date_str(head)
+    if not dprec:
+        for pid in reversed(prev_note_ids[-5:]):
+            row = conn.execute("SELECT date_created, date_created_precision FROM note WHERE id=?", (pid,)).fetchone()
+            if row and row[0]:
+                dprec = (row[0], row[1] or "day")
+                break
+    if not dprec and fallback_name:
+        dprec = parse_date_str(fallback_name)
+    if dprec:
+        d, prec = dprec
+        conn.execute("UPDATE note SET date_created=?, date_created_precision=? WHERE id=?", (d, prec, note_id))
+
+
 def ingest_from_manifest(conn: sqlite3.Connection, manifest_path: Path, images_dir: Path) -> Tuple[int, int]:
     data = json.loads(manifest_path.read_text(encoding="utf-8"))
     prefix = data.get("prefix")
     source_basename = data.get("source_basename")
+    source_path = data.get("source")
+    inputfile_id: Optional[int] = None
+    if source_path:
+        try:
+            inputfile_id = upsert_inputfile(conn, Path(source_path), original_filename=source_basename or Path(source_path).name)
+        except Exception:
+            inputfile_id = None
     created_notes: List[int] = []
     # Build ordered list
     entries = sorted(data.get("images", []), key=lambda e: natural_key(Path(e.get("dest", "")).name))
@@ -153,6 +309,10 @@ def ingest_from_manifest(conn: sqlite3.Connection, manifest_path: Path, images_d
         nid = insert_note(conn, text)
         created_notes.append(nid)
         upsert_note_file(conn, nid, file_id, page_order=idx)
+        if inputfile_id is not None:
+            link_note_inputfile(conn, nid, inputfile_id)
+        # Date inference per policy
+        set_note_date_ordered(conn, nid, text, created_notes[:-1], source_basename or (Path(source_path).name if source_path else None))
         # Mark processed if we have text
         if text.strip():
             conn.execute("UPDATE file SET fully_processed=1 WHERE id=?", (file_id,))
@@ -179,6 +339,13 @@ def ingest_from_paths(conn: sqlite3.Connection, paths: List[Path], original_name
         # Create note for this image and link
         note_id = insert_note(conn, text)
         upsert_note_file(conn, note_id, file_id, page_order=1)
+        # link provenance and set date
+        try:
+            iid = upsert_inputfile(conn, img, original_filename=original_name or img.name)
+            link_note_inputfile(conn, note_id, iid)
+        except Exception:
+            pass
+        set_note_date_ordered(conn, note_id, text, [], original_name or img.name)
         if text.strip():
             conn.execute("UPDATE file SET fully_processed=1 WHERE id=?", (file_id,))
         # No prev/next chaining across standalone images here
