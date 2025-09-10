@@ -26,6 +26,70 @@ PDF_EXTS = {".pdf"}
 TEXT_EXTS = {".txt", ".md", ".rtf", ".docx", ".doc", ".odt", ".html", ".htm", ".tex", ".epub"}
 
 
+def _read_json(path: Path) -> dict:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _apply_ingest_config(args: argparse.Namespace) -> None:
+    cfg_path = Path(os.environ.get("CONFIG_DIR", "/data/config")) / "ingest.json"
+    if cfg_path.exists():
+        cfg = _read_json(cfg_path)
+        paths = cfg.get("paths", {})
+        args.root = paths.get("newdataDir", args.root)
+        args.images_dir = paths.get("imagesDir", args.images_dir)
+        args.ocr_dir = paths.get("ocrDir", args.ocr_dir)
+        args.notes_db = paths.get("notesDb", args.notes_db)
+        std = paths.get("standardWorksDb")
+        if std:
+            os.environ["STANDARD_WORKS_DB"] = std
+        datecfg = cfg.get("dateInference", {})
+        if datecfg:
+            os.environ["DATE_HEAD_CHARS"] = str(datecfg.get("headChars", 300))
+            os.environ["DATE_LOOKBACK"] = str(datecfg.get("lookback", 5))
+        aliases = (cfg.get("scripture") or {}).get("aliases")
+        if aliases:
+            os.environ["BOOK_ALIASES"] = aliases
+        if "moveProcessed" in cfg:
+            args.move_processed = bool(cfg.get("moveProcessed"))
+        if "maxWorkers" in cfg:
+            args.max_workers = int(cfg.get("maxWorkers", 1))
+        if "watch" in cfg:
+            args.watch = bool(cfg.get("watch"))
+
+    # OCR config → environment for ocr-image
+    ocfg_path = Path(os.environ.get("CONFIG_DIR", "/data/config")) / "ocr.json"
+    if ocfg_path.exists():
+        ocfg = _read_json(ocfg_path)
+        if ocfg.get("engine"):
+            os.environ["OCR_ENGINE"] = ocfg.get("engine")
+        if ocfg.get("langs"):
+            os.environ["OCR_LANGS"] = ",".join(ocfg.get("langs"))
+        trocr = ocfg.get("trocr") or {}
+        if trocr.get("modelId"):
+            os.environ["TROCR_MODEL_ID"] = trocr.get("modelId")
+        if trocr.get("segment"):
+            os.environ["TROCR_SEGMENT"] = trocr.get("segment")
+        if trocr.get("maxTokens") is not None:
+            os.environ["TROCR_MAX_TOKENS"] = str(trocr.get("maxTokens"))
+        if trocr.get("lineHeight") is not None:
+            os.environ["TROCR_LINE_HEIGHT"] = str(trocr.get("lineHeight"))
+        tesser = ocfg.get("tesseract") or {}
+        if tesser.get("psm") is not None:
+            os.environ["TESSERACT_PSM"] = str(tesser.get("psm"))
+        if tesser.get("oem") is not None:
+            os.environ["TESSERACT_OEM"] = str(tesser.get("oem"))
+        oai = ocfg.get("openai") or {}
+        if oai.get("model"):
+            os.environ["OPENAI_OCR_MODEL"] = oai.get("model")
+        if oai.get("fallbackModel"):
+            os.environ["OPENAI_OCR_FALLBACK_MODEL"] = oai.get("fallbackModel")
+        if oai.get("perPageDelaySec") is not None:
+            os.environ["OPENAI_OCR_DELAY_S"] = str(oai.get("perPageDelaySec"))
+
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Ingest new data and route to OCR or text conversion")
     p.add_argument("--root", default=os.environ.get("NEWDATA_DIR", "/data/newdata"), help="Input root directory")
@@ -56,6 +120,7 @@ def classify(path: Path) -> str:
 
 def main() -> int:
     args = parse_args()
+    _apply_ingest_config(args)
     root = Path(args.root)
     if not root.exists():
         print(f"[ingest] root not found: {root}", file=sys.stderr)

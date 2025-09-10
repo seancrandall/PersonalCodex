@@ -10,6 +10,36 @@ from typing import List, Dict, Any, Tuple
 import base64
 import time
 import random
+from typing import Tuple
+
+
+TXT_DIR = Path(os.environ.get("TXT_DIR", "/data/txt"))
+
+
+def _ensure_dir(p: Path) -> None:
+    p.mkdir(parents=True, exist_ok=True)
+
+
+def _output_paths_for(img_path: Path) -> Tuple[Path, Path]:
+    """Return (json_path, txt_path) under /data/txt instead of next to the image.
+
+    - For PDF pages (input under /data/ocr/<sha>/pages), write to /data/txt/<sha>/pages/
+    - For standalone images, write to /data/txt/
+    """
+    try:
+        parent = img_path.parent
+        if parent.name == "pages" and parent.parent and parent.parent.exists():
+            sha = parent.parent.name
+            out_dir = TXT_DIR / sha / "pages"
+            _ensure_dir(out_dir)
+            base = img_path.stem
+            return out_dir / f"{base}.ocr.json", out_dir / f"{base}.txt"
+    except Exception:
+        pass
+    out_dir = TXT_DIR
+    _ensure_dir(out_dir)
+    base = img_path.stem
+    return out_dir / f"{base}.ocr.json", out_dir / f"{base}.txt"
 
 
 def run_tesseract_tsv(img: Path, lang: str, psm: int, oem: int) -> str:
@@ -111,8 +141,7 @@ def process_path_with_tesseract(path: Path, lang: str, psm: int, oem: int) -> in
             continue
         blocks = parse_tsv_to_blocks(tsv)
         # Write JSON and TXT next to image
-        json_path = img.with_suffix(".ocr.json")
-        txt_path = img.with_suffix(".txt")
+        json_path, txt_path = _output_paths_for(img)
         txt = "\n".join([b["content"] for b in blocks]) + "\n"
         json_path.write_text(json.dumps({"page": None, "blocks": blocks}, ensure_ascii=False, indent=2), encoding="utf-8")
         txt_path.write_text(txt, encoding="utf-8")
@@ -187,8 +216,7 @@ def process_path_with_doctr(path: Path) -> int:
                     "block_type": "line",
                     "confidence": avg_conf,
                 })
-        json_path = img_path.with_suffix(".ocr.json")
-        txt_path = img_path.with_suffix(".txt")
+        json_path, txt_path = _output_paths_for(img_path)
         txt = "\n".join([b["content"] for b in blocks if b.get("content")]) + "\n"
         json_path.write_text(json.dumps({"page": None, "blocks": blocks}, ensure_ascii=False, indent=2), encoding="utf-8")
         txt_path.write_text(txt, encoding="utf-8")
@@ -333,8 +361,7 @@ def process_path_with_trocr(path: Path, model_id: str | None = None, device: str
                     "block_type": "line",
                     "confidence": None,
                 })
-        json_path = img_path.with_suffix(".ocr.json")
-        txt_path = img_path.with_suffix(".txt")
+        json_path, txt_path = _output_paths_for(img_path)
         txt = "\n".join([b["content"] for b in blocks if b.get("content")]) + "\n"
         json_path.write_text(json.dumps({"page": None, "blocks": blocks}, ensure_ascii=False, indent=2), encoding="utf-8")
         txt_path.write_text(txt, encoding="utf-8")
@@ -375,8 +402,7 @@ def process_path_with_paddle(path: Path, lang: str) -> int:
                 "block_type": "line",
                 "confidence": float(conf) if conf is not None else None,
             })
-        json_path = img.with_suffix(".ocr.json")
-        txt_path = img.with_suffix(".txt")
+        json_path, txt_path = _output_paths_for(img)
         txt = "\n".join([b["content"] for b in blocks if b.get("content")]) + "\n"
         json_path.write_text(json.dumps({"page": None, "blocks": blocks}, ensure_ascii=False, indent=2), encoding="utf-8")
         txt_path.write_text(txt, encoding="utf-8")
