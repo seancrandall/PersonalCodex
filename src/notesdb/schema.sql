@@ -100,6 +100,39 @@ AFTER INSERT ON note_block BEGIN
     INSERT INTO note_block_fts(rowid, content) VALUES (new.id, new.content);
 END;
 
+-- ===============================
+-- Block Edit Dates (change history)
+-- ===============================
+-- Normalized list of edit dates. Stored as ISO date (YYYY-MM-DD).
+CREATE TABLE IF NOT EXISTS edit_date (
+    id              INTEGER PRIMARY KEY,
+    edit_date       TEXT NOT NULL, -- ISO date
+    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (edit_date)
+);
+
+-- Junction: many edit dates per block; a date can apply to many blocks
+CREATE TABLE IF NOT EXISTS block_edit_date (
+    note_block_id   INTEGER NOT NULL REFERENCES note_block(id) ON DELETE CASCADE,
+    edit_date_id    INTEGER NOT NULL REFERENCES edit_date(id) ON DELETE CASCADE,
+    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (note_block_id, edit_date_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_block_edit_date_block ON block_edit_date(note_block_id);
+CREATE INDEX IF NOT EXISTS idx_block_edit_date_date ON block_edit_date(edit_date_id);
+
+-- Automatically record a changed date whenever block content updates
+CREATE TRIGGER IF NOT EXISTS trg_note_block_edit_date
+AFTER UPDATE OF content ON note_block
+BEGIN
+    -- Ensure the edit_date row for today exists
+    INSERT OR IGNORE INTO edit_date(edit_date) VALUES (DATE('now'));
+    -- Link this block to today's edit_date
+    INSERT OR IGNORE INTO block_edit_date(note_block_id, edit_date_id)
+    SELECT NEW.id, ed.id FROM edit_date ed WHERE ed.edit_date = DATE('now');
+END;
+
 CREATE TRIGGER IF NOT EXISTS trg_note_block_ad
 AFTER DELETE ON note_block BEGIN
     INSERT INTO note_block_fts(note_block_fts, rowid, content) VALUES('delete', old.id, old.content);
