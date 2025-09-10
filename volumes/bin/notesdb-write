@@ -23,6 +23,18 @@ def open_db(path: str) -> sqlite3.Connection:
     conn.execute("PRAGMA busy_timeout=5000")
     return conn
 
+def resolve_local(path: Optional[str]) -> Optional[Path]:
+    if not path:
+        return None
+    p = Path(path)
+    if p.exists():
+        return p
+    # Map container '/data/...' to local 'volumes/...'
+    if path.startswith('/data/'):
+        q = Path('volumes') / Path(path).relative_to('/data')
+        return q
+    return p
+
 
 def ensure_note_by_source(conn: sqlite3.Connection, source_key: str, title: Optional[str] = None) -> int:
     cur = conn.execute("SELECT note_id FROM note_source WHERE source_key = ?", (source_key,))
@@ -42,18 +54,32 @@ def ensure_note_by_source(conn: sqlite3.Connection, source_key: str, title: Opti
     return note_id
 
 
+def infer_format_from_path(path: str) -> Optional[str]:
+    ext = Path(path).suffix.lower()
+    if ext == ".png":
+        return "png"
+    if ext in {".jpg", ".jpeg"}:
+        return "jpeg"
+    if ext in {".tif", ".tiff"}:
+        return "tiff"
+    return None
+
+
 def upsert_file(conn: sqlite3.Connection, path: str, original_filename: Optional[str], ocr_txt: Optional[str], ocr_json: Optional[str]) -> int:
+    fmt = infer_format_from_path(path)
+    if not fmt:
+        raise SystemExit(f"[notesdb-write] unsupported image format for {path}")
     # Set original_filename only if inserting or currently NULL
     conn.execute(
         """
-        INSERT INTO file(path, original_filename, ocr_text_path, ocr_json_path)
-        VALUES(?, ?, ?, ?)
+        INSERT INTO file(path, original_filename, ocr_text_path, ocr_json_path, format)
+        VALUES(?, ?, ?, ?, ?)
         ON CONFLICT(path) DO UPDATE SET
             ocr_text_path=excluded.ocr_text_path,
             ocr_json_path=excluded.ocr_json_path,
             original_filename=COALESCE(file.original_filename, excluded.original_filename)
         """,
-        (path, original_filename, ocr_txt, ocr_json),
+        (path, original_filename, ocr_txt, ocr_json, fmt),
     )
     cur = conn.execute("SELECT id FROM file WHERE path = ?", (path,))
     return int(cur.fetchone()[0])
@@ -127,13 +153,22 @@ def ingest_from_manifest(conn: sqlite3.Connection, manifest_path: Path, images_d
         img_path = dest if dest.is_absolute() else (images_dir / dest.name)
         txt_path = img_path.with_suffix(".txt")
         json_path = img_path.with_suffix(".ocr.json")
-        text = txt_path.read_text(encoding="utf-8") if txt_path.exists() else ""
+        # Fall back to OCR artifacts next to original pages src
+        src = entry.get("src")
+        src_p = resolve_local(src) if src else None
+        src_txt = src_p.with_suffix(".txt") if src_p else None
+        src_json = src_p.with_suffix(".ocr.json") if src_p else None
+        if not (txt_path.exists()) and src_txt and src_txt.exists():
+            txt_path = src_txt
+        if not (json_path.exists()) and src_json and src_json.exists():
+            json_path = src_json
+        text = txt_path.read_text(encoding="utf-8") if (txt_path and txt_path.exists()) else ""
         file_id = upsert_file(
             conn,
             path=str(img_path),
             original_filename=source_basename,
-            ocr_txt=str(txt_path) if txt_path.exists() else None,
-            ocr_json=str(json_path) if json_path.exists() else None,
+            ocr_txt=str(txt_path) if (txt_path and txt_path.exists()) else None,
+            ocr_json=str(json_path) if (json_path and json_path.exists()) else None,
         )
         upsert_note_file(conn, note_id, file_id, page_order=idx)
         upsert_transcribed_page(conn, note_id, file_id, page_order=idx, text=text, json_path=str(json_path) if json_path.exists() else None)
@@ -204,4 +239,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

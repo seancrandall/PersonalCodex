@@ -38,19 +38,55 @@ def normalize_alias(s: str) -> str:
     return s
 
 
-def compile_ref_regex() -> re.Pattern:
-    # book (text) + chapter + optional verses list
-    # We capture the raw book token and normalize it later against alias map.
-    book = r"(?P<book>[A-Za-z0-9&+\.\-\s]{2,40}?)"
+def alias_to_pattern(alias: str) -> str:
+    # Build a flexible regex for a single alias, tolerating punctuation and optional periods
+    out = []
+    i = 0
+    alias = alias.strip()
+    while i < len(alias):
+        ch = alias[i]
+        if ch.isalnum():
+            j = i
+            while j < len(alias) and alias[j].isalnum():
+                j += 1
+            word = re.escape(alias[i:j])
+            out.append(f"{word}\\.?")
+            i = j
+        elif ch in ['&', '+']:
+            out.append(r"\s*(?:and|&|\+)\s*")
+            while i < len(alias) and alias[i] in ['&', '+']:
+                i += 1
+        elif ch == ' ':
+            out.append(r"\s*")
+            while i < len(alias) and alias[i] == ' ':
+                i += 1
+        elif ch in ['-', '_', '/', '.']:
+            out.append(r"\s*")
+            i += 1
+        else:
+            # other punctuation -> optional whitespace
+            out.append(r"\s*")
+            i += 1
+    return "".join(out)
+
+
+def compile_ref_regex_from_aliases(aliases: Dict[str, Tuple[str, str]]) -> re.Pattern:
+    # Build alternation of alias patterns
+    # Use the keys of the reverse map (normalized aliases) to rebuild patterns close to original forms
+    alts = []
+    for norm_alias in aliases.keys():
+        # Rehydrate a simple readable alias for pattern building
+        alias_form = norm_alias.replace(" and ", " & ")
+        alts.append(alias_to_pattern(alias_form))
+    book_group = "(?P<book>(?:" + "|".join(alts) + "))"
     chap = r"\s*(?P<chap>\d{1,3})"
     verses = (
         r"(?::\s*(?P<verses>\d{1,3}(?:\s*" + RANGE_SEP + r"\s*\d{1,3})?(?:\s*,\s*\d{1,3}(?:\s*"
         + RANGE_SEP
         + r"\s*\d{1,3})?)*))?"
     )
-    # Word boundary before, and ensure next char after match isn't a letter (to reduce false positives)
-    pattern = r"\b" + book + chap + verses + r"(?![A-Za-z])"
-    return re.compile(pattern)
+    pattern = r"\b" + book_group + chap + verses + r"(?![A-Za-z])"
+    return re.compile(pattern, re.IGNORECASE)
 
 
 def parse_verses_list(vs: Optional[str]) -> List[Tuple[int, int]]:
@@ -84,17 +120,17 @@ class BookKey:
 
 
 def resolve_book(std: sqlite3.Connection, key: BookKey) -> Tuple[int, int]:
-    # Returns (volume_id, book_id)
-    cur = std.execute("SELECT id FROM volume WHERE VolumeName = ?", (key.volume,))
+    # Returns (volume_id, book_id), case-insensitive on names
+    cur = std.execute("SELECT id FROM volume WHERE lower(VolumeName) = lower(?)", (key.volume,))
     vrow = cur.fetchone()
     if not vrow:
         raise RuntimeError(f"Volume not found: {key.volume}")
     vol_id = int(vrow[0])
-    cur = std.execute("SELECT id FROM book WHERE fkVolume = ? AND BookName = ?", (vol_id, key.book))
+    cur = std.execute("SELECT id FROM book WHERE fkVolume = ? AND lower(BookName) = lower(?)", (vol_id, key.book))
     brow = cur.fetchone()
     if not brow:
         # Fallback: try ShortTitle
-        cur = std.execute("SELECT id FROM book WHERE fkVolume = ? AND ShortTitle = ?", (vol_id, key.book))
+        cur = std.execute("SELECT id FROM book WHERE fkVolume = ? AND lower(ShortTitle) = lower(?)", (vol_id, key.book))
         brow = cur.fetchone()
     if not brow:
         raise RuntimeError(f"Book not found: {key.volume}:{key.book}")
@@ -164,11 +200,22 @@ def make_citation(book_disp: str, chap: int, vranges: List[Tuple[int, int]]) -> 
     return f"{book_disp} {chap}:{verses}" if verses else f"{book_disp} {chap}"
 
 
+def parse_parenthetical_after(text: str, end_idx: int) -> List[Tuple[int, int]]:
+    # Look ahead for patterns like "(12-13)" or "(12, 14-15)"
+    tail = text[end_idx : end_idx + 64]
+    m = re.match(r"\s*\((?P<inner>\s*\d{1,3}(?:\s*" + RANGE_SEP + r"\s*\d{1,3})?(?:\s*,\s*\d{1,3}(?:\s*" + RANGE_SEP + r"\s*\d{1,3})?)*\s*)\)", tail)
+    if not m:
+        return []
+    inner = m.group("inner")
+    return parse_verses_list(inner)
+
+
 def process_note(note_id: int, text: str, notes: sqlite3.Connection, std: sqlite3.Connection, alias_map: Dict[str, Tuple[str, str]]) -> Tuple[int, int]:
-    regex = compile_ref_regex()
+    regex = compile_ref_regex_from_aliases(alias_map)
     found = 0
     linked = 0
-    for m in regex.finditer(text or ""):
+    s = text or ""
+    for m in regex.finditer(s):
         raw_book = (m.group("book") or "").strip()
         chap = int(m.group("chap"))
         verses_str = m.group("verses")
@@ -183,6 +230,13 @@ def process_note(note_id: int, text: str, notes: sqlite3.Connection, std: sqlite
         except Exception:
             continue
         vranges = parse_verses_list(verses_str)
+        # Also support a trailing parenthetical range like "(12-13)"
+        extra = parse_parenthetical_after(s, m.end())
+        if extra:
+            if not vranges:
+                vranges = extra
+            else:
+                vranges.extend(extra)
         if not vranges:
             # Whole chapter
             start = verse_id(std, chap_id, 1)
@@ -241,10 +295,19 @@ def main() -> int:
                 found, linked = process_note(int(nid), text, notes_conn, std_conn, alias_map)
                 total_found += found
                 total_linked += linked
+                # Also scan each page's text to catch localized refs
+                prows = notes_conn.execute(
+                    "SELECT text FROM transcribed_page WHERE note_id=? ORDER BY page_order ASC", (nid,)
+                ).fetchall()
+                for (ptext,) in prows:
+                    if not ptext:
+                        continue
+                    f2, l2 = process_note(int(nid), ptext, notes_conn, std_conn, alias_map)
+                    total_found += f2
+                    total_linked += l2
         print(f"[notesdb-passages] notes={len(note_rows)} refs_found={total_found} linked={total_linked}")
     return 0
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

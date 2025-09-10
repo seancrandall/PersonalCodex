@@ -5,7 +5,7 @@
     "old testament:leviticus": ["lev", "leviticus"],
     "old testament:numbers": ["num", "numbers"],
     "old testament:deuteronomy": ["deut", "deuteronomy", "deu"],
-    "old testament:joshu a": ["josh", "joshua"],
+    "old testament:joshua": ["josh", "joshua"],
     "old testament:judges": ["judg", "judges"],
     "old testament:ruth": ["ruth"],
     "old testament:1 samuel": ["1 sam", "1 samuel", "i samuel", "1sam", "1-samuel"],
@@ -93,4 +93,3 @@
     "pearl of great price:articles of faith": ["a of f", "aof", "articles of faith", "ao f"]
   }
 }
-
