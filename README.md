@@ -59,7 +59,7 @@ Make targets
 - `make clean-notesdb` — remove the notes DB.
 
 Linked pages and migration
-- Linked navigation: image pages (note_file) now support `prev_file_id` and `next_file_id`. Transcribed pages are stored in a new `transcribed_page` table with `prev_id`/`next_id`.
+- Linked navigation: notes link to images via `note_file`. Notes themselves chain with `prev_note_id`/`next_note_id`.
 - Migrate existing DB: `make migrate-notesdb-links`
 - Rebuild pointers from page_order: `make rebuild-page-links`
   - Advanced: `python scripts/rebuild_page_links.py --db volumes/notesdb/notes.db --only-missing --dry-run`

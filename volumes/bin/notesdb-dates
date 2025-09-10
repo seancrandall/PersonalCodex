@@ -229,7 +229,7 @@ def iter_note_ids(conn: sqlite3.Connection, note_id: Optional[int]):
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Infer and update dates for pages and notes")
+    ap = argparse.ArgumentParser(description="Infer and update dates for notes (new schema)")
     ap.add_argument("--db", default="/data/notesdb/notes.db")
     ap.add_argument("--note-id", type=int)
     ap.add_argument("--only-missing", action="store_true")
@@ -237,18 +237,65 @@ def main() -> int:
     ap.add_argument("--lookback", type=int, default=5)
     args = ap.parse_args()
 
+    def _has_column(conn: sqlite3.Connection, table: str, column: str) -> bool:
+        try:
+            cols = [r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()]
+            return column in cols
+        except Exception:
+            return False
+
     with closing(sqlite3.connect(args.db)) as conn:
         conn.execute("PRAGMA foreign_keys=ON")
-        total_pages = 0
-        notes_with_date = 0
+        updated = 0
         with conn:
             for nid in iter_note_ids(conn, args.note_id):
-                only_missing = (not args.overwrite) and args.only_missing
-                up_pages, note_has_date = process_note(conn, nid, only_missing, args.lookback)
-                total_pages += up_pages
-                notes_with_date += note_has_date
-    print(f"[notesdb-dates] page_updates={total_pages} notes_with_date={notes_with_date}")
-    return 0
+                # Get existing date
+                row = conn.execute("SELECT date_created FROM note WHERE id=?", (nid,)).fetchone()
+                if not row:
+                    continue
+                if row[0] and args.only_missing and not args.overwrite:
+                    continue
+                # Read content
+                col = "content" if _has_column(conn, "note", "content") else ("raw_text" if _has_column(conn, "note", "raw_text") else None)
+                text = ""
+                if col:
+                    crow = conn.execute(f"SELECT {col} FROM note WHERE id=?", (nid,)).fetchone()
+                    text = (crow[0] or "") if crow else ""
+                # Lookback via prev_note_id chain
+                prev_ids = []
+                pid = conn.execute("SELECT prev_note_id FROM note WHERE id=?", (nid,)).fetchone()
+                pid = pid[0] if pid else None
+                hops = 0
+                while pid and hops < args.lookback:
+                    prev_ids.append(int(pid))
+                    pid = conn.execute("SELECT prev_note_id FROM note WHERE id=?", (pid,)).fetchone()
+                    pid = pid[0] if pid else None
+                    hops += 1
+                # Fallback inputfile name
+                fname = None
+                irow = conn.execute(
+                    "SELECT ifl.original_filename FROM note_inputfile ni JOIN inputfile ifl ON ifl.id=ni.inputfile_id WHERE ni.note_id=? LIMIT 1",
+                    (nid,),
+                ).fetchone()
+                if irow:
+                    fname = irow[0]
+                # Choose date per policy: head → prev chain → filename
+                head = (text or "")[:300]
+                dprec = find_date_in_text(head, head_chars=300)
+                if not dprec:
+                    for pid in prev_ids:
+                        prow = conn.execute("SELECT date_created, date_created_precision FROM note WHERE id=?", (pid,)).fetchone()
+                        if prow and prow[0]:
+                            dprec = (prow[0], prow[1] or "day")
+                            break
+                if not dprec and fname:
+                    dprec = parse_date_str(fname)
+                if dprec:
+                    d, prec = dprec
+                    conn.execute("UPDATE note SET date_created=?, date_created_precision=? WHERE id=?", (d, prec, nid))
+                    updated += 1
+        print(f"[notesdb-dates] notes_updated={updated}")
+        return 0
 
 
 if __name__ == "__main__":

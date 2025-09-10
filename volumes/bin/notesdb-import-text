@@ -93,10 +93,122 @@ def ensure_note_for_text(conn: sqlite3.Connection, source_key: str, title: str) 
     row = conn.execute("SELECT note_id FROM note_source WHERE source_key=?", (source_key,)).fetchone()
     if row:
         return int(row[0])
-    cur = conn.execute("INSERT INTO note(title) VALUES (?)", (title,))
+    cur = conn.execute("INSERT INTO note(content, title) VALUES (?, ?)", ("", title))
     nid = int(cur.lastrowid)
     conn.execute("INSERT INTO note_source(note_id, source_key) VALUES (?, ?)", (nid, source_key))
     return nid
+
+
+# --- Minimal date parsing for header or filename ---
+MONTHS = {
+    "jan": 1, "january": 1,
+    "feb": 2, "february": 2,
+    "mar": 3, "march": 3,
+    "apr": 4, "april": 4,
+    "may": 5,
+    "jun": 6, "june": 6,
+    "jul": 7, "july": 7,
+    "aug": 8, "august": 8,
+    "sep": 9, "sept": 9, "september": 9,
+    "oct": 10, "october": 10,
+    "nov": 11, "november": 11,
+    "dec": 12, "december": 12,
+}
+ISO_RE = re.compile(r"\b(19\d{2}|20\d{2})[-/\.](0?[1-9]|1[0-2])[-/\.](0?[1-9]|[12]\d|3[01])\b")
+NUM_RE = re.compile(r"\b(0?[1-9]|1[0-2])[\-\./_](0?[1-9]|[12]\d|3[01])[\-\./_](\d{2,4}|'\d{2}|’\d{2})\b")
+NAME1_RE = re.compile(r"\b(\w{3,9})\.?,?\s+([0-3]?\d)(?:st|nd|rd|th)?(?:,)?\s+(\d{2,4}|'\d{2}|’\d{2})\b", re.IGNORECASE)
+NAME2_RE = re.compile(r"\b([0-3]?\d)(?:st|nd|rd|th)?\s+(\w{3,9})\.?,?\s+(\d{2,4}|'\d{2}|’\d{2})\b", re.IGNORECASE)
+COMPACT_YMD_RE = re.compile(r"\b(19\d{2}|20\d{2})(0[1-9]|1[0-2])([012]\d|3[01])\b")
+YM_ISO_RE = re.compile(r"\b(19\d{2}|20\d{2})[-/\.](0?[1-9]|1[0-2])\b")
+MY_NAME_RE = re.compile(r"\b(\w{3,9})\.?,?\s+(\d{2,4}|'\d{2}|’\d{2})\b", re.IGNORECASE)
+Y_ONLY_RE = re.compile(r"\b(19\d{2}|20\d{2})\b")
+
+
+def _pad(n: int) -> str:
+    return f"{n:02d}"
+
+
+def _normalize_year(y: int) -> int:
+    if y < 100:
+        return 2000 + y if y <= 49 else 1900 + y
+    return y
+
+
+def _valid_date(y: int, m: int, d: int) -> bool:
+    try:
+        import datetime as _dt
+        _dt.date(_normalize_year(y), m, d)
+        return True
+    except Exception:
+        return False
+
+
+def _parse_yy_fragment(val: str) -> int:
+    val = val.strip().lstrip("'").lstrip("’")
+    try:
+        return int(val)
+    except Exception:
+        return 0
+
+
+def parse_date_str(s: str):
+    if not s:
+        return None
+    m = ISO_RE.search(s)
+    if m:
+        y, mo, da = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        if _valid_date(y, mo, da):
+            return f"{_normalize_year(y)}-{_pad(mo)}-{_pad(da)}", "day"
+    m = NAME1_RE.search(s)
+    if m:
+        mon = MONTHS.get(m.group(1).lower().rstrip('.'))
+        if mon:
+            d = int(m.group(2))
+            y = _parse_yy_fragment(m.group(3))
+            if _valid_date(y, mon, d):
+                return f"{_normalize_year(y)}-{_pad(mon)}-{_pad(d)}", "day"
+    m = NAME2_RE.search(s)
+    if m:
+        d = int(m.group(1))
+        mon = MONTHS.get(m.group(2).lower().rstrip('.'))
+        y = _parse_yy_fragment(m.group(3))
+        if mon and _valid_date(y, mon, d):
+            return f"{_normalize_year(y)}-{_pad(mon)}-{_pad(d)}", "day"
+    m = NUM_RE.search(s)
+    if m:
+        mo, da, yfrag = int(m.group(1)), int(m.group(2)), _parse_yy_fragment(m.group(3))
+        y = yfrag
+        if _valid_date(y, mo, da):
+            return f"{_normalize_year(y)}-{_pad(mo)}-{_pad(da)}", "day"
+    m = COMPACT_YMD_RE.search(s)
+    if m:
+        y, mo, da = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        if _valid_date(y, mo, da):
+            return f"{_normalize_year(y)}-{_pad(mo)}-{_pad(da)}", "day"
+    m = YM_ISO_RE.search(s)
+    if m:
+        y, mo = int(m.group(1)), int(m.group(2))
+        if 1 <= mo <= 12:
+            return f"{_normalize_year(y)}-{_pad(mo)}-01", "month"
+    m = MY_NAME_RE.search(s)
+    if m:
+        mon = MONTHS.get(m.group(1).lower().rstrip('.'))
+        y = _parse_yy_fragment(m.group(2))
+        if mon and y:
+            return f"{_normalize_year(y)}-{_pad(mon)}-01", "month"
+    m = Y_ONLY_RE.search(s)
+    if m:
+        y = int(m.group(1))
+        return f"{_normalize_year(y)}-01-01", "year"
+    return None
+
+
+def set_note_date_from_text_or_name(conn: sqlite3.Connection, nid: int, text: str, filename: str) -> None:
+    head = (text or "")[:300]
+    dprec = parse_date_str(head) or parse_date_str(filename)
+    if dprec:
+        d, prec = dprec
+        conn.execute("UPDATE note SET date_created=?, date_created_precision=? WHERE id=?", (d, prec, nid))
 
 
 def main() -> int:
@@ -125,19 +237,11 @@ def main() -> int:
                     rel = str(path)
                 source_key = f"text:{rel}"
                 nid = ensure_note_for_text(conn, source_key, title)
-                # Write into note.raw_text and also as a single-page transcribed_page (file_id NULL)
-                conn.execute("UPDATE note SET raw_text=? WHERE id=?", (text, nid))
-                # Ensure page 1
-                conn.execute(
-                    """
-                    INSERT INTO transcribed_page(note_id, page_order, text)
-                    VALUES(?, 1, ?)
-                    ON CONFLICT(note_id, page_order) DO UPDATE SET text=excluded.text
-                    """,
-                    (nid, text),
-                )
+                # Write content and infer date
+                conn.execute("UPDATE note SET content=? WHERE id=?", (text, nid))
+                set_note_date_from_text_or_name(conn, nid, text, path.name)
                 print(f"[notesdb-import-text] imported {path} -> note {nid}")
-        # Post-processing: per-note dates and passages
+        # Post-processing: scripture passages
         for p in args.paths:
             path = Path(p)
             try:
@@ -149,10 +253,6 @@ def main() -> int:
             if not row:
                 continue
             nid = int(row[0])
-            # Infer dates (only for this note)
-            os.system(f"volumes/bin/notesdb-dates --db {args.db} --note-id {nid} --overwrite >/dev/null 2>&1 || true")
-            # Assemble to update metadata date fields as well
-            os.system(f"volumes/bin/notesdb-assemble --db {args.db} --note-id {nid} --overwrite >/dev/null 2>&1 || true")
             # Link passages
             std_db = os.environ.get("STANDARD_WORKS_DB", "/data/scripdb/standardworks.db")
             alias = os.environ.get("BOOK_ALIASES", "/data/scripdb/book_aliases.json")
@@ -163,4 +263,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
