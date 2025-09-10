@@ -1,0 +1,62 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import json
+import os
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description="Write OCR batch manifest alongside moved_images.json")
+    ap.add_argument("--ocr-root", required=True, help="OCR batch root (contains pages/ and moved_images.json)")
+    ap.add_argument("--engine", required=True, help="OCR engine used (e.g., tesseract|doctr|trocr|openai)")
+    ap.add_argument("--images-dir", default=os.environ.get("IMAGES_DIR", "/data/images"))
+    args = ap.parse_args()
+
+    ocr_root = Path(args.ocr_root)
+    moved = ocr_root / "moved_images.json"
+    pages_dir = ocr_root / "pages"
+    if not moved.exists():
+        print(f"[write-ocr-manifest] missing {moved}")
+        return 1
+    try:
+        data = json.loads(moved.read_text(encoding="utf-8"))
+    except Exception as e:
+        print(f"[write-ocr-manifest] failed to read moved_images.json: {e}")
+        return 1
+
+    meta: Dict[str, Any] = {}
+    meta["created_at"] = datetime.now(timezone.utc).isoformat()
+    meta["engine"] = args.engine
+    # Include engine-specific hints from environment if present
+    hints = {}
+    for k in (
+        "TROCR_MODEL_ID",
+        "OPENAI_OCR_MODEL",
+        "OPENAI_OCR_FALLBACK_MODEL",
+        "OCR_LANGS",
+    ):
+        v = os.environ.get(k)
+        if v:
+            hints[k] = v
+    meta["engine_hints"] = hints
+    meta["prefix"] = data.get("prefix")
+    meta["sha"] = data.get("sha")
+    meta["images_dir"] = str(args.images_dir)
+
+    images = data.get("images", []) or []
+    meta["page_count"] = len(images) if images else len(list((pages_dir if pages_dir.exists() else ocr_root).glob("pages/page-*.png")))
+    meta["images"] = images
+
+    out = ocr_root / "manifest.json"
+    out.write_text(json.dumps(meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    print(f"[write-ocr-manifest] wrote {out}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+

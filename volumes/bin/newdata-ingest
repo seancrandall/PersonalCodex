@@ -145,6 +145,20 @@ def main() -> int:
                 args.images_dir,
             ], check=True)
 
+            # 3b) write OCR batch manifest for provenance
+            try:
+                subprocess.run([
+                    "write-ocr-manifest",
+                    "--ocr-root",
+                    str(ocr_root),
+                    "--engine",
+                    args.engine,
+                    "--images-dir",
+                    args.images_dir,
+                ], check=True)
+            except subprocess.CalledProcessError as e:
+                print(f"[ingest] write-ocr-manifest failed for {ocr_root}: {e}")
+
             # 4) write notes DB
             manifest = ocr_root / "moved_images.json"
             if manifest.exists():
