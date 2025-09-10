@@ -26,7 +26,8 @@ def main() -> int:
     if not prefix:
         prefix = "note"
 
-    out_path = Path(args.out) if args.out else Path(args.images_dir) / f"{prefix}-ocr.md"
+    # Write Markdown alongside OCR root by default to keep /data/images images-only
+    out_path = Path(args.out) if args.out else (root / f"{prefix}-ocr.md")
     lines: list[str] = []
     lines.append(f"# OCR for {meta.get('source', '')}\n")
     for p in sorted(meta.get("pages", []), key=lambda x: x["page"]):

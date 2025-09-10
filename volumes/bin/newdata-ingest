@@ -228,6 +228,8 @@ def main() -> int:
                 "assemble-md",
                 "--ocr-root",
                 str(txt_root),
+                "--out",
+                str(txt_root / f"page-{sha}-ocr.md"),
                 "--images-dir",
                 args.images_dir,
             ], check=True)
