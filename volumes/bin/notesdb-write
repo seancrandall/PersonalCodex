@@ -139,6 +139,24 @@ def set_prev_next_for_note(conn: sqlite3.Connection, note_id: int) -> None:
         )
 
 
+def _find_txt_json_for_image(img_path: Path, sha: str | None = None) -> Tuple[Optional[Path], Optional[Path]]:
+    # 1) Next to image
+    txt = img_path.with_suffix(".txt")
+    js = img_path.with_suffix(".ocr.json")
+    if txt.exists() or js.exists():
+        return (txt if txt.exists() else None, js if js.exists() else None)
+    # 2) In TXT_DIR/<sha>/pages (for PDF batches)
+    if sha:
+        t1 = TXT_DIR / sha / "pages" / (img_path.stem + ".txt")
+        j1 = TXT_DIR / sha / "pages" / (img_path.stem + ".ocr.json")
+        if t1.exists() or j1.exists():
+            return (t1 if t1.exists() else None, j1 if j1.exists() else None)
+    # 3) In TXT_DIR root (for single images)
+    t2 = TXT_DIR / (img_path.stem + ".txt")
+    j2 = TXT_DIR / (img_path.stem + ".ocr.json")
+    return ((t2 if t2.exists() else None), (j2 if j2.exists() else None))
+
+
 def ingest_from_manifest(conn: sqlite3.Connection, manifest_path: Path, images_dir: Path) -> Tuple[int, int]:
     data = json.loads(manifest_path.read_text(encoding="utf-8"))
     prefix = data.get("prefix")
@@ -151,24 +169,14 @@ def ingest_from_manifest(conn: sqlite3.Connection, manifest_path: Path, images_d
     for idx, entry in enumerate(entries, start=1):
         dest = Path(entry.get("dest"))
         img_path = dest if dest.is_absolute() else (images_dir / dest.name)
-        txt_path = img_path.with_suffix(".txt")
-        json_path = img_path.with_suffix(".ocr.json")
-        # Fall back to OCR artifacts next to original pages src
-        src = entry.get("src")
-        src_p = resolve_local(src) if src else None
-        src_txt = src_p.with_suffix(".txt") if src_p else None
-        src_json = src_p.with_suffix(".ocr.json") if src_p else None
-        if not (txt_path.exists()) and src_txt and src_txt.exists():
-            txt_path = src_txt
-        if not (json_path.exists()) and src_json and src_json.exists():
-            json_path = src_json
+        txt_path, json_path = _find_txt_json_for_image(img_path, sha=str(data.get("sha")) if data.get("sha") else None)
         text = txt_path.read_text(encoding="utf-8") if (txt_path and txt_path.exists()) else ""
         file_id = upsert_file(
             conn,
             path=str(img_path),
             original_filename=source_basename,
-            ocr_txt=str(txt_path) if (txt_path and txt_path.exists()) else None,
-            ocr_json=str(json_path) if (json_path and json_path.exists()) else None,
+            ocr_txt=str(txt_path) if (txt_path and txt_path and txt_path.exists()) else None,
+            ocr_json=str(json_path) if (json_path and json_path and json_path.exists()) else None,
         )
         upsert_note_file(conn, note_id, file_id, page_order=idx)
         upsert_transcribed_page(conn, note_id, file_id, page_order=idx, text=text, json_path=str(json_path) if json_path.exists() else None)
@@ -189,15 +197,14 @@ def ingest_from_paths(conn: sqlite3.Connection, paths: List[Path], original_name
         stem = img.stem
         source_key = stem
         note_id = ensure_note_by_source(conn, source_key=source_key, title=original_name or stem)
-        txt_path = img.with_suffix(".txt")
-        json_path = img.with_suffix(".ocr.json")
-        text = txt_path.read_text(encoding="utf-8") if txt_path.exists() else ""
+        txt_path, json_path = _find_txt_json_for_image(img, sha=None)
+        text = txt_path.read_text(encoding="utf-8") if (txt_path and txt_path.exists()) else ""
         file_id = upsert_file(
             conn,
             path=str(img),
             original_filename=original_name or img.name,
-            ocr_txt=str(txt_path) if txt_path.exists() else None,
-            ocr_json=str(json_path) if json_path.exists() else None,
+            ocr_txt=str(txt_path) if (txt_path and txt_path.exists()) else None,
+            ocr_json=str(json_path) if (json_path and json_path.exists()) else None,
         )
         # page_order fixed to 1 for single-file notes
         upsert_note_file(conn, note_id, file_id, page_order=1)
@@ -232,6 +239,7 @@ def main() -> int:
                 note_id = note_id or n2
                 count += c2
         print(f"[notesdb-write] committed note_id={note_id}, items={count}")
+TXT_DIR = Path(os.environ.get("TXT_DIR", "/data/txt"))
     finally:
         conn.close()
     return 0

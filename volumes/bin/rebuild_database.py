@@ -147,6 +147,10 @@ def find_date_in_text(text: str, head_chars: int = 600, head_lines: int = 5) -> 
     return parse_date_str(head)
 
 
+def find_date_in_head(text: str, head_chars: int = 300) -> Optional[tuple[str, str]]:
+    return parse_date_str((text or "")[:head_chars])
+
+
 # -----------------------------
 # Scripture reference parsing (from notesdb-passages)
 # -----------------------------
@@ -474,10 +478,26 @@ def link_note_inputfile(conn: sqlite3.Connection, note_id: int, inputfile_id: in
     )
 
 
-def set_note_date(conn: sqlite3.Connection, note_id: int, text: str, fallback_name: Optional[str]) -> None:
-    dprec = find_date_in_text(text)
+def set_note_date_ordered(
+    conn: sqlite3.Connection,
+    note_id: int,
+    text: str,
+    prev_note_ids: List[int],
+    fallback_name: Optional[str],
+) -> None:
+    # (a) top of note (first 300 chars)
+    dprec = find_date_in_head(text, head_chars=300)
+    # (b) up to five previous notes' date_created
+    if not dprec:
+        for pid in reversed(prev_note_ids[-5:]):
+            row = conn.execute("SELECT date_created, date_created_precision FROM note WHERE id=?", (pid,)).fetchone()
+            if row and row[0]:
+                dprec = (row[0], row[1] or "day")
+                break
+    # (c) input filename fallback
     if not dprec and fallback_name:
         dprec = parse_date_str(fallback_name)
+    # Apply if found; otherwise leave null
     if dprec:
         d, prec = dprec
         conn.execute(
@@ -524,7 +544,7 @@ def process_pdf_batch_root(conn: sqlite3.Connection, ocr_root: Path, images_dir:
 
     # Prepare scripture linking
     alias_map = load_aliases(aliases_path) if aliases_path and Path(aliases_path).exists() else {}
-    std_conn = sqlite3.connect(str(DEFAULT_STD_DB)) if std_db and Path(std_db).exists() else None
+    std_conn = sqlite3.connect(str(std_db)) if std_db and Path(std_db).exists() else None
 
     created_notes: List[int] = []
     with conn:
@@ -563,8 +583,8 @@ def process_pdf_batch_root(conn: sqlite3.Connection, ocr_root: Path, images_dir:
                 link_note_file(conn, nid, file_id, page_order=idx)
             if inputfile_id is not None:
                 link_note_inputfile(conn, nid, inputfile_id)
-            # Set date (from note text; fallback to source file name)
-            set_note_date(conn, nid, text, source_pdf.name if source_pdf else None)
+            # Set date per policy (a) head of note (b) previous notes (c) input file name
+            set_note_date_ordered(conn, nid, text, created_notes[:-1], source_pdf.name if source_pdf else None)
             # Scripture refs
             if std_conn is not None and alias_map:
                 try:
@@ -616,7 +636,7 @@ def rebuild_from_txt_dir(conn: sqlite3.Connection, txt_dir: Path, images_dir: Pa
                     link_note_inputfile(conn, nid, input_id)
                 except Exception:
                     pass
-                set_note_date(conn, nid, text, root.name)
+                set_note_date_ordered(conn, nid, text, [], root.name)
                 # scripture
                 if Path(std_db).exists() and Path(aliases_path).exists():
                     try:
@@ -666,7 +686,7 @@ def rebuild_from_images(conn: sqlite3.Connection, images_dir: Path, std_db: str,
                     link_note_inputfile(conn, nid, iid)
             except Exception:
                 pass
-            set_note_date(conn, nid, text, (img.name if img else txt_path.name))
+            set_note_date_ordered(conn, nid, text, [], (img.name if img else txt_path.name))
             if Path(std_db).exists() and Path(aliases_path).exists():
                 try:
                     std_conn = sqlite3.connect(str(std_db))
@@ -694,6 +714,34 @@ def main() -> int:
 
     db_path = Path(args.db)
     db_path.parent.mkdir(parents=True, exist_ok=True)
+    # Migrate stray artifacts from images → txt so images holds only images
+    def migrate_images_artifacts(images_dir: Path, txt_dir: Path) -> int:
+        moved = 0
+        if not images_dir.exists():
+            return 0
+        txt_dir.mkdir(parents=True, exist_ok=True)
+        for ext in ("*.txt", "*.ocr.json", "*.md"):
+            for p in sorted(images_dir.glob(ext)):
+                dest = txt_dir / p.name
+                # Avoid overwrite by appending a numeric suffix
+                if dest.exists():
+                    base = dest.stem; suf = dest.suffix
+                    k = 1
+                    while True:
+                        cand = txt_dir / f"{base}-{k}{suf}"
+                        if not cand.exists():
+                            dest = cand
+                            break
+                        k += 1
+                try:
+                    p.replace(dest)
+                    moved += 1
+                except Exception:
+                    pass
+        return moved
+
+    moved = migrate_images_artifacts(Path(args.images_dir), Path(args.txt_dir))
+
     with closing(open_db(db_path)) as conn:
         # Reset DB by applying schema (CREATE IF NOT EXISTS; assumes a new file or compatible schema)
         apply_schema(conn, Path(args.schema))
@@ -713,4 +761,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

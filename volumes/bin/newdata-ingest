@@ -125,13 +125,21 @@ def main() -> int:
     if not root.exists():
         print(f"[ingest] root not found: {root}", file=sys.stderr)
         return 1
-    pdf_files = [p for p in root.rglob("*.pdf") if p.is_file()]
+    recursive = False
+    try:
+        recursive = bool(os.environ.get("INGEST_RECURSIVE", "0").lower() in ("1", "true", "yes", "on"))
+    except Exception:
+        pass
+    def _iter(pattern: str):
+        return root.rglob(pattern) if recursive else root.glob(pattern)
+
+    pdf_files = [p for p in _iter("*.pdf") if p.is_file() and "/processed/" not in str(p)]
     image_files = [
-        p for p in root.rglob("*")
+        p for p in _iter("*")
         if p.is_file() and p.suffix.lower() in IMAGE_EXTS and "/processed/" not in str(p)
     ]
     text_files = [
-        p for p in root.rglob("*")
+        p for p in _iter("*")
         if p.is_file() and p.suffix.lower() in TEXT_EXTS and "/processed/" not in str(p)
     ]
     if not pdf_files and not image_files and not text_files:
@@ -179,16 +187,15 @@ def main() -> int:
 
         if not args.dry_run:
             success = False
-            # Always run OCR over rendered pages
+            # Run OCR over pages (ocr-image writes to /data/txt/<sha>/pages)
             try:
                 subprocess.run(["ocr-image", str(pages_dir)], check=True)
             except subprocess.CalledProcessError as e:
                 print(f"[ingest] OCR failed for {pdf}: {e}")
                 success = False
             else:
-                # Consider success if any OCR JSON exists
-                ocr_jsons = list(pages_dir.glob("*.ocr.json"))
-                success = len(ocr_jsons) > 0
+                txt_pages = list((Path(os.environ.get("TXT_DIR", "/data/txt")) / sha / "pages").glob("*.txt"))
+                success = len(txt_pages) > 0
 
             if not success:
                 print(f"[ingest] No text detected for {pdf}; leaving source in place.")
@@ -228,8 +235,21 @@ def main() -> int:
             except subprocess.CalledProcessError as e:
                 print(f"[ingest] write-ocr-manifest failed for {ocr_root}: {e}")
 
+            # 3c) move JSON/text artifacts from /data/ocr to /data/txt
+            try:
+                txt_root = Path(os.environ.get("TXT_DIR", "/data/txt")) / sha
+                (txt_root / "pages").mkdir(parents=True, exist_ok=True)
+                for bj in (pages_dir.glob("*.blocks.json")):
+                    bj.replace(txt_root / "pages" / bj.name)
+                for name in ("meta.json", "moved_images.json", "manifest.json"):
+                    srcp = ocr_root / name
+                    if srcp.exists():
+                        srcp.replace(txt_root / name)
+            except Exception as e:
+                print(f"[ingest] failed to relocate OCR text artifacts to txt/: {e}")
+
             # 4) write notes DB
-            manifest = ocr_root / "moved_images.json"
+            manifest = Path(os.environ.get("TXT_DIR", "/data/txt")) / sha / "moved_images.json"
             if manifest.exists():
                 subprocess.run([
                     "notesdb-write",

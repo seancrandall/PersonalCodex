@@ -7,8 +7,11 @@ volumes/images/
 volumes/notesdb/*.db
 volumes/ocr/
 volumes/txt/
-volumes/images/*.txt
-volumes/images/*.ocr.json
+volumes/images/
+volumes/newdata/
+volumes/notesdb/
+volumes/models/
+volumes/models/
 *.sqlite
 *.db
 *.log
