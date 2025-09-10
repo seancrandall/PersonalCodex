@@ -268,20 +268,8 @@ def main() -> int:
                     "--images-dir",
                     args.images_dir,
                 ], check=True)
-                # Assemble note text/metadata for any newly written notes
-                subprocess.run([
-                    "notesdb-assemble",
-                    "--db",
-                    args.notes_db,
-                    "--only-missing",
-                ], check=True)
-                # Infer dates for new pages/notes
-                subprocess.run([
-                    "notesdb-dates",
-                    "--db",
-                    args.notes_db,
-                    "--only-missing",
-                ], check=True)
+                # Assemble and dates are handled by the new pipeline (notes are written directly)
+                # Keep scripture linking for new notes
                 # Link scripture passages
                 subprocess.run([
                     "notesdb-passages",
@@ -330,18 +318,7 @@ def main() -> int:
                 except subprocess.CalledProcessError as e:
                     print(f"[ingest] notesdb-write failed for {dest}: {e}")
                 else:
-                    subprocess.run([
-                        "notesdb-assemble",
-                        "--db",
-                        args.notes_db,
-                        "--only-missing",
-                    ], check=True)
-                    subprocess.run([
-                        "notesdb-dates",
-                        "--db",
-                        args.notes_db,
-                        "--only-missing",
-                    ], check=True)
+                    # Scripture linking for the new single-image note
                     subprocess.run([
                         "notesdb-passages",
                         "--notes-db",

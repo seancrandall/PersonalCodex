@@ -16,14 +16,31 @@ def open_db(path: str) -> sqlite3.Connection:
     return conn
 
 
+def _has_table(conn: sqlite3.Connection, name: str) -> bool:
+    row = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (name,)).fetchone()
+    return bool(row)
+
+
+def _has_column(conn: sqlite3.Connection, table: str, column: str) -> bool:
+    try:
+        cols = [r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()]
+        return column in cols
+    except Exception:
+        return False
+
+
 def iter_target_notes(conn: sqlite3.Connection, note_id: int | None, only_missing: bool):
     if note_id is not None:
         rows = conn.execute("SELECT id FROM note WHERE id=?", (note_id,)).fetchall()
         for (nid,) in rows:
             yield nid
         return
+    # Support both legacy (raw_text) and new (content) schemas
+    target_col = "raw_text" if _has_column(conn, "note", "raw_text") else ("content" if _has_column(conn, "note", "content") else None)
+    if target_col is None:
+        return
     if only_missing:
-        q = "SELECT id FROM note WHERE raw_text IS NULL OR TRIM(raw_text) = '' ORDER BY id"
+        q = f"SELECT id FROM note WHERE {target_col} IS NULL OR TRIM({target_col}) = '' ORDER BY id"
     else:
         q = "SELECT id FROM note ORDER BY id"
     for (nid,) in conn.execute(q):
@@ -124,20 +141,22 @@ def build_metadata(conn: sqlite3.Connection, note_id: int, raw_text: str) -> str
 
 
 def assemble(conn: sqlite3.Connection, note_id: int | None, only_missing: bool, overwrite: bool) -> tuple[int, int]:
+    # If no transcribed_page table, nothing to assemble in the new schema
+    if not _has_table(conn, "transcribed_page"):
+        return 0, 0
     updated = 0
     skipped = 0
     for nid in iter_target_notes(conn, note_id, only_missing):
-        row = conn.execute("SELECT raw_text FROM note WHERE id=?", (nid,)).fetchone()
+        # Prefer new content column; fallback to raw_text if present
+        col = "content" if _has_column(conn, "note", "content") else "raw_text"
+        row = conn.execute(f"SELECT {col} FROM note WHERE id=?", (nid,)).fetchone()
         current = row[0] if row else None
         if current and not overwrite and only_missing:
             skipped += 1
             continue
         raw = build_note_text(conn, nid)
         meta = build_metadata(conn, nid, raw)
-        conn.execute(
-            "UPDATE note SET raw_text=?, metadata_json=? WHERE id=?",
-            (raw, meta, nid),
-        )
+        conn.execute(f"UPDATE note SET {col}=?, metadata_json=? WHERE id=?", (raw, meta, nid))
         updated += 1
     return updated, skipped
 
@@ -152,6 +171,10 @@ def main() -> int:
 
     with closing(open_db(args.db)) as conn:
         with conn:
+            # If schema is new (no transcribed_page or raw_text), no-op gracefully
+            if not _has_table(conn, "transcribed_page") and _has_column(conn, "note", "content"):
+                print("[notesdb-assemble] new schema detected (content, no transcribed_page); nothing to assemble.")
+                return 0
             updated, skipped = assemble(conn, args.note_id, args.only_missing, args.overwrite)
     print(f"[notesdb-assemble] updated={updated} skipped={skipped}")
     return 0
