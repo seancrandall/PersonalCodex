@@ -88,6 +88,12 @@ def _apply_ingest_config(args: argparse.Namespace) -> None:
             os.environ["OPENAI_OCR_FALLBACK_MODEL"] = oai.get("fallbackModel")
         if oai.get("perPageDelaySec") is not None:
             os.environ["OPENAI_OCR_DELAY_S"] = str(oai.get("perPageDelaySec"))
+    # Optional recursion flag in config
+    cfg_root = Path(os.environ.get("CONFIG_DIR", "/data/config")) / "ingest.json"
+    if cfg_root.exists():
+        cfg = _read_json(cfg_root)
+        if "recursive" in cfg:
+            os.environ["INGEST_RECURSIVE"] = "1" if cfg.get("recursive") else "0"
 
 
 def parse_args() -> argparse.Namespace:
@@ -195,7 +201,9 @@ def main() -> int:
                 success = False
             else:
                 txt_pages = list((Path(os.environ.get("TXT_DIR", "/data/txt")) / sha / "pages").glob("*.txt"))
-                success = len(txt_pages) > 0
+                # Fallback: legacy write next to images (should be empty after our OCR changes)
+                legacy_txt = list(pages_dir.glob("*.txt"))
+                success = (len(txt_pages) + len(legacy_txt)) > 0
 
             if not success:
                 print(f"[ingest] No text detected for {pdf}; leaving source in place.")
