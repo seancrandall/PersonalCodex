@@ -1,0 +1,166 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import html
+import io
+import json
+import os
+import re
+import sqlite3
+import zipfile
+from contextlib import closing
+from pathlib import Path
+from typing import Optional
+
+
+TEXT_EXTS = {".txt", ".md", ".rtf", ".docx", ".odt", ".html", ".htm", ".tex", ".epub"}
+
+
+def to_text(path: Path) -> str:
+    ext = path.suffix.lower()
+    if ext == ".txt":
+        return path.read_text(encoding="utf-8", errors="ignore")
+    if ext == ".md":
+        # Minimal cleanup: strip code fences, headers; leave content otherwise
+        s = path.read_text(encoding="utf-8", errors="ignore")
+        s = re.sub(r"^```[\s\S]*?^```", "", s, flags=re.MULTILINE)
+        s = re.sub(r"^#+\s*", "", s, flags=re.MULTILINE)
+        return s
+    if ext in {".html", ".htm"}:
+        s = path.read_text(encoding="utf-8", errors="ignore")
+        s = re.sub(r"<script[\s\S]*?</script>", " ", s, flags=re.IGNORECASE)
+        s = re.sub(r"<style[\s\S]*?</style>", " ", s, flags=re.IGNORECASE)
+        s = re.sub(r"<[^>]+>", " ", s)
+        return html.unescape(re.sub(r"\s+", " ", s)).strip()
+    if ext == ".docx":
+        with zipfile.ZipFile(path) as z:
+            try:
+                xml = z.read("word/document.xml").decode("utf-8", errors="ignore")
+            except KeyError:
+                return ""
+        xml = re.sub(r"<w:tab[^>]*/>", "\t", xml)
+        xml = re.sub(r"</w:p>", "\n\n", xml)
+        text = re.sub(r"<[^>]+>", " ", xml)
+        return html.unescape(re.sub(r"\s+", " ", text)).strip()
+    if ext == ".odt":
+        with zipfile.ZipFile(path) as z:
+            try:
+                xml = z.read("content.xml").decode("utf-8", errors="ignore")
+            except KeyError:
+                return ""
+        xml = re.sub(r"</text:p>", "\n\n", xml)
+        text = re.sub(r"<[^>]+>", " ", xml)
+        return html.unescape(re.sub(r"\s+", " ", text)).strip()
+    if ext == ".epub":
+        with zipfile.ZipFile(path) as z:
+            text_parts = []
+            for name in z.namelist():
+                if name.lower().endswith(('.xhtml', '.html', '.htm')):
+                    try:
+                        s = z.read(name).decode('utf-8', errors='ignore')
+                    except Exception:
+                        continue
+                    s = re.sub(r"<script[\s\S]*?</script>", " ", s, flags=re.IGNORECASE)
+                    s = re.sub(r"<style[\s\S]*?</style>", " ", s, flags=re.IGNORECASE)
+                    s = re.sub(r"<[^>]+>", " ", s)
+                    text_parts.append(html.unescape(re.sub(r"\s+", " ", s)).strip())
+        return "\n\n".join(tp for tp in text_parts if tp)
+    if ext == ".rtf":
+        s = path.read_text(encoding="utf-8", errors="ignore")
+        s = re.sub(r"\\[a-zA-Z]+-?\d* ?", "", s)
+        s = re.sub(r"{\\[^}]+}", " ", s)
+        s = re.sub(r"[{}]", " ", s)
+        return re.sub(r"\s+", " ", s).strip()
+    if ext == ".tex":
+        s = path.read_text(encoding="utf-8", errors="ignore")
+        s = re.sub(r"\\begin\{.*?\}[\s\S]*?\\end\{.*?\}", " ", s)
+        s = re.sub(r"\\[a-zA-Z]+\*?(\[[^\]]*\])?(\{[^}]*\})?", " ", s)
+        s = re.sub(r"\$[^$]*\$", " ", s)
+        return re.sub(r"\s+", " ", s).strip()
+    # Fallback: treat as text
+    return path.read_text(encoding="utf-8", errors="ignore")
+
+
+def open_db(path: str) -> sqlite3.Connection:
+    conn = sqlite3.connect(path)
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute("PRAGMA busy_timeout=5000")
+    return conn
+
+
+def ensure_note_for_text(conn: sqlite3.Connection, source_key: str, title: str) -> int:
+    row = conn.execute("SELECT note_id FROM note_source WHERE source_key=?", (source_key,)).fetchone()
+    if row:
+        return int(row[0])
+    cur = conn.execute("INSERT INTO note(title) VALUES (?)", (title,))
+    nid = int(cur.lastrowid)
+    conn.execute("INSERT INTO note_source(note_id, source_key) VALUES (?, ?)", (nid, source_key))
+    return nid
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description="Import text files into notes.db (one note per file)")
+    ap.add_argument("--db", default=os.environ.get("NOTES_DB", "/data/notesdb/notes.db"))
+    ap.add_argument("paths", nargs="+", help="Text files to import")
+    args = ap.parse_args()
+
+    with closing(open_db(args.db)) as conn:
+        with conn:
+            for p in args.paths:
+                path = Path(p)
+                if path.suffix.lower() not in TEXT_EXTS:
+                    print(f"[notesdb-import-text] skip (not text): {path}")
+                    continue
+                try:
+                    text = to_text(path)
+                except Exception as e:
+                    print(f"[notesdb-import-text] failed to parse {path}: {e}")
+                    continue
+                title = path.stem
+                # Source key from relative path under newdata if possible
+                try:
+                    rel = str(path.relative_to(Path('volumes/newdata')))
+                except Exception:
+                    rel = str(path)
+                source_key = f"text:{rel}"
+                nid = ensure_note_for_text(conn, source_key, title)
+                # Write into note.raw_text and also as a single-page transcribed_page (file_id NULL)
+                conn.execute("UPDATE note SET raw_text=? WHERE id=?", (text, nid))
+                # Ensure page 1
+                conn.execute(
+                    """
+                    INSERT INTO transcribed_page(note_id, page_order, text)
+                    VALUES(?, 1, ?)
+                    ON CONFLICT(note_id, page_order) DO UPDATE SET text=excluded.text
+                    """,
+                    (nid, text),
+                )
+                print(f"[notesdb-import-text] imported {path} -> note {nid}")
+        # Post-processing: per-note dates and passages
+        for p in args.paths:
+            path = Path(p)
+            try:
+                rel = str(path.relative_to(Path('volumes/newdata')))
+            except Exception:
+                rel = str(path)
+            source_key = f"text:{rel}"
+            row = conn.execute("SELECT note_id FROM note_source WHERE source_key=?", (source_key,)).fetchone()
+            if not row:
+                continue
+            nid = int(row[0])
+            # Infer dates (only for this note)
+            os.system(f"volumes/bin/notesdb-dates --db {args.db} --note-id {nid} --overwrite >/dev/null 2>&1 || true")
+            # Assemble to update metadata date fields as well
+            os.system(f"volumes/bin/notesdb-assemble --db {args.db} --note-id {nid} --overwrite >/dev/null 2>&1 || true")
+            # Link passages
+            std_db = os.environ.get("STANDARD_WORKS_DB", "/data/scripdb/standardworks.db")
+            alias = os.environ.get("BOOK_ALIASES", "/data/scripdb/book_aliases.json")
+            os.system(f"volumes/bin/notesdb-passages --notes-db {args.db} --std-db {std_db} --aliases {alias} --note-id {nid} >/dev/null 2>&1 || true")
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+

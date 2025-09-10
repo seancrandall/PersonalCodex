@@ -65,8 +65,12 @@ def main() -> int:
         p for p in root.rglob("*")
         if p.is_file() and p.suffix.lower() in IMAGE_EXTS and "/processed/" not in str(p)
     ]
-    if not pdf_files and not image_files:
-        print("[ingest] No PDF or image files to process.")
+    text_files = [
+        p for p in root.rglob("*")
+        if p.is_file() and p.suffix.lower() in TEXT_EXTS and "/processed/" not in str(p)
+    ]
+    if not pdf_files and not image_files and not text_files:
+        print("[ingest] No PDF, image, or text files to process.")
         return 0
     processed_dir = root / "processed"
     processed_dir.mkdir(parents=True, exist_ok=True)
@@ -245,6 +249,36 @@ def main() -> int:
                         args.notes_db,
                         "--only-missing",
                     ], check=True)
+                    subprocess.run([
+                        "notesdb-passages",
+                        "--notes-db",
+                        args.notes_db,
+                        "--std-db",
+                        os.environ.get("STANDARD_WORKS_DB", "/data/scripdb/standardworks.db")
+                    ], check=True)
+
+    # 3) Handle text files (md/html/txt/docx/rtf/odt/epub/tex)
+    if text_files:
+        print(f"[ingest] Found {len(text_files)} text file(s) to import.")
+    for tfile in sorted(text_files):
+        if args.dry_run:
+            print(f"[ingest] would import text {tfile}")
+            continue
+        try:
+            subprocess.run([
+                "notesdb-import-text",
+                "--db",
+                args.notes_db,
+                str(tfile),
+            ], check=True)
+        except subprocess.CalledProcessError as e:
+            print(f"[ingest] notesdb-import-text failed for {tfile}: {e}")
+            continue
+        # Post-process: dates and passages for this note handled inside CLI
+        if args.move_processed:
+            destp = processed_dir / tfile.name
+            destp.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(tfile), str(destp))
                     subprocess.run([
                         "notesdb-passages",
                         "--notes-db",
