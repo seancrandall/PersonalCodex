@@ -10,6 +10,9 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
 
 
+TXT_DIR = Path(os.environ.get("TXT_DIR", "/data/txt"))
+
+
 def natural_key(s: str) -> List[Any]:
     import re
     return [int(text) if text.isdigit() else text.lower() for text in re.split(r"(\d+)", s)]
@@ -36,22 +39,9 @@ def resolve_local(path: Optional[str]) -> Optional[Path]:
     return p
 
 
-def ensure_note_by_source(conn: sqlite3.Connection, source_key: str, title: Optional[str] = None) -> int:
-    cur = conn.execute("SELECT note_id FROM note_source WHERE source_key = ?", (source_key,))
-    row = cur.fetchone()
-    if row:
-        return int(row[0])
-    # Create a new note and map
-    cur = conn.execute(
-        "INSERT INTO note(title) VALUES (?)",
-        (title or source_key,),
-    )
-    note_id = int(cur.lastrowid)
-    conn.execute(
-        "INSERT OR IGNORE INTO note_source(note_id, source_key) VALUES (?, ?)",
-        (note_id, source_key),
-    )
-    return note_id
+def insert_note(conn: sqlite3.Connection, content: str) -> int:
+    cur = conn.execute("INSERT INTO note(content) VALUES (?)", (content,))
+    return int(cur.lastrowid)
 
 
 def infer_format_from_path(path: str) -> Optional[str]:
@@ -97,46 +87,16 @@ def upsert_note_file(conn: sqlite3.Connection, note_id: int, file_id: int, page_
     )
 
 
-def upsert_transcribed_page(conn: sqlite3.Connection, note_id: int, file_id: Optional[int], page_order: int, text: str, json_path: Optional[str]) -> int:
-    conn.execute(
-        """
-        INSERT INTO transcribed_page(note_id, file_id, page_order, text, json_path)
-        VALUES (?, ?, ?, ?, ?)
-        ON CONFLICT(note_id, page_order) DO UPDATE SET
-            text=excluded.text,
-            json_path=excluded.json_path,
-            file_id=COALESCE(transcribed_page.file_id, excluded.file_id)
-        """,
-        (note_id, file_id, page_order, text, json_path),
-    )
-    cur = conn.execute("SELECT id FROM transcribed_page WHERE note_id=? AND page_order=?", (note_id, page_order))
-    return int(cur.fetchone()[0])
+def set_prev_next_notes(conn: sqlite3.Connection, note_ids: List[int]) -> None:
+    for i, nid in enumerate(note_ids):
+        prev_id = note_ids[i - 1] if i > 0 else None
+        next_id = note_ids[i + 1] if i + 1 < len(note_ids) else None
+        conn.execute("UPDATE note SET prev_note_id=?, next_note_id=? WHERE id=?", (prev_id, next_id, nid))
 
 
 def set_prev_next_for_note(conn: sqlite3.Connection, note_id: int) -> None:
-    # Derive links from page_order for both note_file and transcribed_page
-    rows = conn.execute(
-        "SELECT file_id, page_order FROM note_file WHERE note_id=? ORDER BY page_order ASC, file_id ASC",
-        (note_id,),
-    ).fetchall()
-    for i, (fid, _ord) in enumerate(rows):
-        prev_f = rows[i - 1][0] if i > 0 else None
-        next_f = rows[i + 1][0] if i + 1 < len(rows) else None
-        conn.execute(
-            "UPDATE note_file SET prev_file_id=?, next_file_id=? WHERE note_id=? AND file_id=?",
-            (prev_f, next_f, note_id, fid),
-        )
-    trows = conn.execute(
-        "SELECT id FROM transcribed_page WHERE note_id=? ORDER BY page_order ASC, id ASC",
-        (note_id,),
-    ).fetchall()
-    for i, (tid,) in enumerate(trows):
-        prev_t = trows[i - 1][0] if i > 0 else None
-        next_t = trows[i + 1][0] if i + 1 < len(trows) else None
-        conn.execute(
-            "UPDATE transcribed_page SET prev_id=?, next_id=? WHERE id=?",
-            (prev_t, next_t, tid),
-        )
+    # Legacy no-op maintained for compatibility
+    return
 
 
 def _find_txt_json_for_image(img_path: Path, sha: str | None = None) -> Tuple[Optional[Path], Optional[Path]]:
@@ -161,8 +121,7 @@ def ingest_from_manifest(conn: sqlite3.Connection, manifest_path: Path, images_d
     data = json.loads(manifest_path.read_text(encoding="utf-8"))
     prefix = data.get("prefix")
     source_basename = data.get("source_basename")
-    source_key = prefix  # stable per source PDF batch
-    note_id = ensure_note_by_source(conn, source_key=source_key, title=source_basename)
+    created_notes: List[int] = []
     # Build ordered list
     entries = sorted(data.get("images", []), key=lambda e: natural_key(Path(e.get("dest", "")).name))
     updated = 0
@@ -178,14 +137,15 @@ def ingest_from_manifest(conn: sqlite3.Connection, manifest_path: Path, images_d
             ocr_txt=str(txt_path) if (txt_path and txt_path and txt_path.exists()) else None,
             ocr_json=str(json_path) if (json_path and json_path and json_path.exists()) else None,
         )
-        upsert_note_file(conn, note_id, file_id, page_order=idx)
-        upsert_transcribed_page(conn, note_id, file_id, page_order=idx, text=text, json_path=str(json_path) if json_path.exists() else None)
+        nid = insert_note(conn, text)
+        created_notes.append(nid)
+        upsert_note_file(conn, nid, file_id, page_order=idx)
         # Mark processed if we have text
         if text.strip():
             conn.execute("UPDATE file SET fully_processed=1 WHERE id=?", (file_id,))
         updated += 1
-    set_prev_next_for_note(conn, note_id)
-    return note_id, updated
+    set_prev_next_notes(conn, created_notes)
+    return (created_notes[0] if created_notes else 0), updated
 
 
 def ingest_from_paths(conn: sqlite3.Connection, paths: List[Path], original_name: Optional[str]) -> Tuple[int, int]:
@@ -194,9 +154,6 @@ def ingest_from_paths(conn: sqlite3.Connection, paths: List[Path], original_name
     last_note_id = 0
     for img in paths:
         images_dir = img.parent
-        stem = img.stem
-        source_key = stem
-        note_id = ensure_note_by_source(conn, source_key=source_key, title=original_name or stem)
         txt_path, json_path = _find_txt_json_for_image(img, sha=None)
         text = txt_path.read_text(encoding="utf-8") if (txt_path and txt_path.exists()) else ""
         file_id = upsert_file(
@@ -206,12 +163,12 @@ def ingest_from_paths(conn: sqlite3.Connection, paths: List[Path], original_name
             ocr_txt=str(txt_path) if (txt_path and txt_path.exists()) else None,
             ocr_json=str(json_path) if (json_path and json_path.exists()) else None,
         )
-        # page_order fixed to 1 for single-file notes
+        # Create note for this image and link
+        note_id = insert_note(conn, text)
         upsert_note_file(conn, note_id, file_id, page_order=1)
-        upsert_transcribed_page(conn, note_id, file_id, page_order=1, text=text, json_path=str(json_path) if json_path.exists() else None)
         if text.strip():
             conn.execute("UPDATE file SET fully_processed=1 WHERE id=?", (file_id,))
-        set_prev_next_for_note(conn, note_id)
+        # No prev/next chaining across standalone images here
         total += 1
         last_note_id = note_id
     return last_note_id, total
@@ -239,7 +196,6 @@ def main() -> int:
                 note_id = note_id or n2
                 count += c2
         print(f"[notesdb-write] committed note_id={note_id}, items={count}")
-TXT_DIR = Path(os.environ.get("TXT_DIR", "/data/txt"))
     finally:
         conn.close()
     return 0
