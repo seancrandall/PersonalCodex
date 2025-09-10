@@ -128,7 +128,20 @@ def ingest_from_manifest(conn: sqlite3.Connection, manifest_path: Path, images_d
     for idx, entry in enumerate(entries, start=1):
         dest = Path(entry.get("dest"))
         img_path = dest if dest.is_absolute() else (images_dir / dest.name)
-        txt_path, json_path = _find_txt_json_for_image(img_path, sha=str(data.get("sha")) if data.get("sha") else None)
+        # Prefer TXT/JSON based on the original source page path from the manifest
+        txt_path: Optional[Path] = None
+        json_path: Optional[Path] = None
+        src_val = entry.get("src")
+        if src_val:
+            srcp = Path(src_val)
+            s_txt = srcp.with_suffix(".txt")
+            s_json = srcp.with_suffix(".ocr.json")
+            if s_txt.exists() or s_json.exists():
+                txt_path = s_txt if s_txt.exists() else None
+                json_path = s_json if s_json.exists() else None
+        # Fallbacks: try to resolve via sha + image stem or root txt dir
+        if txt_path is None and json_path is None:
+            txt_path, json_path = _find_txt_json_for_image(img_path, sha=str(data.get("sha")) if data.get("sha") else None)
         text = txt_path.read_text(encoding="utf-8") if (txt_path and txt_path.exists()) else ""
         file_id = upsert_file(
             conn,
