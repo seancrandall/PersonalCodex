@@ -258,7 +258,8 @@ def render_and_extract(pdf_path: Path, out_root: Path, dpi: int, pages: Iterable
 def main() -> int:
     ap = argparse.ArgumentParser(description="PDF → per-page PNG + block JSON via PyMuPDF")
     ap.add_argument("input", help="PDF file path")
-    ap.add_argument("--outdir", default=os.environ.get("OCR_DIR", "/data/ocr"), help="Output root (will create a subdir)")
+    # Write under TXT_DIR by default so text artifacts and per-page PNGs live in /data/txt/<sha>/pages
+    ap.add_argument("--outdir", default=os.environ.get("TXT_DIR", "/data/txt"), help="Output root (will create a subdir)")
     ap.add_argument("--subdir", help="Optional subdir name under outdir (e.g., a hash)")
     ap.add_argument("--dpi", type=int, default=300)
     ap.add_argument("--mode", choices=["auto", "rasterize", "extract-text"], default="auto")

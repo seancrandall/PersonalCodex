@@ -40,6 +40,9 @@ def _apply_ingest_config(args: argparse.Namespace) -> None:
         paths = cfg.get("paths", {})
         args.root = paths.get("newdataDir", args.root)
         args.images_dir = paths.get("imagesDir", args.images_dir)
+        # TXT_DIR is the canonical output root for OCR and per-page PNGs
+        os.environ["TXT_DIR"] = paths.get("txtDir", os.environ.get("TXT_DIR", "/data/txt"))
+        # OCR_DIR kept for compatibility; not used for outputs anymore
         args.ocr_dir = paths.get("ocrDir", args.ocr_dir)
         args.notes_db = paths.get("notesDb", args.notes_db)
         std = paths.get("standardWorksDb")
@@ -162,9 +165,9 @@ def main() -> int:
             for chunk in iter(lambda: f.read(1024 * 1024), b""):
                 h.update(chunk)
         sha = h.hexdigest()
-        ocr_root = Path(args.ocr_dir) / sha
-        pages_dir = ocr_root / "pages"
-        done_marker = ocr_root / "done.marker"
+        txt_root = Path(os.environ.get("TXT_DIR", "/data/txt")) / sha
+        pages_dir = txt_root / "pages"
+        done_marker = txt_root / "done.marker"
 
         if done_marker.exists():
             print(f"[ingest] Skip already processed {pdf} ({sha})")
@@ -176,7 +179,7 @@ def main() -> int:
             "pdf-to-pages",
             str(pdf),
             "--outdir",
-            args.ocr_dir,
+            os.environ.get("TXT_DIR", "/data/txt"),
             "--subdir",
             sha,
             "--dpi",
@@ -224,7 +227,7 @@ def main() -> int:
             subprocess.run([
                 "assemble-md",
                 "--ocr-root",
-                str(ocr_root),
+                str(txt_root),
                 "--images-dir",
                 args.images_dir,
             ], check=True)
@@ -234,27 +237,16 @@ def main() -> int:
                 subprocess.run([
                     "write-ocr-manifest",
                     "--ocr-root",
-                    str(ocr_root),
+                    str(txt_root),
                     "--engine",
                     args.engine,
                     "--images-dir",
                     args.images_dir,
                 ], check=True)
             except subprocess.CalledProcessError as e:
-                print(f"[ingest] write-ocr-manifest failed for {ocr_root}: {e}")
+                print(f"[ingest] write-ocr-manifest failed for {txt_root}: {e}")
 
-            # 3c) move JSON/text artifacts from /data/ocr to /data/txt
-            try:
-                txt_root = Path(os.environ.get("TXT_DIR", "/data/txt")) / sha
-                (txt_root / "pages").mkdir(parents=True, exist_ok=True)
-                for bj in (pages_dir.glob("*.blocks.json")):
-                    bj.replace(txt_root / "pages" / bj.name)
-                for name in ("meta.json", "moved_images.json", "manifest.json"):
-                    srcp = ocr_root / name
-                    if srcp.exists():
-                        srcp.replace(txt_root / name)
-            except Exception as e:
-                print(f"[ingest] failed to relocate OCR text artifacts to txt/: {e}")
+            # 3c) no relocation needed: pdf-to-pages already emitted into /data/txt
 
             # 4) write notes DB
             manifest = Path(os.environ.get("TXT_DIR", "/data/txt")) / sha / "moved_images.json"
