@@ -264,6 +264,23 @@ def process_note(note_id: int, text: str, notes: sqlite3.Connection, std: sqlite
     return found, linked
 
 
+def _has_column(conn: sqlite3.Connection, table: str, column: str) -> bool:
+    try:
+        cols = [r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()]
+        return column in cols
+    except Exception:
+        return False
+
+
+def _get_note_text(conn: sqlite3.Connection, note_id: int) -> str:
+    # Prefer new 'content' column; fallback to legacy 'raw_text'
+    col = "content" if _has_column(conn, "note", "content") else ("raw_text" if _has_column(conn, "note", "raw_text") else None)
+    if not col:
+        return ""
+    row = conn.execute(f"SELECT {col} FROM note WHERE id=?", (note_id,)).fetchone()
+    return (row[0] or "") if row else ""
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Scan notes for scripture references and link passages")
     ap.add_argument("--notes-db", default=os.environ.get("NOTES_DB", "/data/notesdb/notes.db"))
@@ -290,15 +307,17 @@ def main() -> int:
             note_rows = notes_conn.execute("SELECT id FROM note ORDER BY id").fetchall()
         with notes_conn:
             for (nid,) in note_rows:
-                trow = notes_conn.execute("SELECT raw_text FROM note WHERE id=?", (nid,)).fetchone()
-                text = trow[0] if trow else ""
+                text = _get_note_text(notes_conn, int(nid))
                 found, linked = process_note(int(nid), text, notes_conn, std_conn, alias_map)
                 total_found += found
                 total_linked += linked
-                # Also scan each page's text to catch localized refs
-                prows = notes_conn.execute(
-                    "SELECT text FROM transcribed_page WHERE note_id=? ORDER BY page_order ASC", (nid,)
-                ).fetchall()
+                # Also scan each page's text for legacy schema if the table exists
+                try:
+                    prows = notes_conn.execute(
+                        "SELECT text FROM transcribed_page WHERE note_id=? ORDER BY page_order ASC", (nid,)
+                    ).fetchall()
+                except sqlite3.OperationalError:
+                    prows = []
                 for (ptext,) in prows:
                     if not ptext:
                         continue
