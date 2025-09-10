@@ -1,0 +1,21 @@
+{
+  "paths": {
+    "newdataDir": "/data/newdata",
+    "imagesDir": "/data/images",
+    "txtDir": "/data/txt",
+    "ocrDir": "/data/ocr",
+    "notesDb": "/data/notesdb/notes.db",
+    "standardWorksDb": "/data/scripdb/standardworks.db"
+  },
+  "moveProcessed": true,
+  "maxWorkers": 1,
+  "watch": false,
+  "dateInference": {
+    "headChars": 300,
+    "lookback": 5
+  },
+  "scripture": {
+    "aliases": "/data/scripdb/book_aliases.json"
+  }
+}
+

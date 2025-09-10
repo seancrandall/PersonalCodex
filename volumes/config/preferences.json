@@ -1,0 +1,21 @@
+{
+  "theme": "system", 
+  "fontSize": 16,
+  "lineHeight": 1.6,
+  "codeFontSize": 14,
+  "showVerseRefs": true,
+  "showTags": true,
+  "showConfidence": false,
+  "defaultSort": "date-desc",
+  "sidebar": {
+    "width": 300,
+    "pinned": true
+  },
+  "search": {
+    "caseSensitive": false,
+    "useRegex": false,
+    "highlightMatches": true,
+    "maxResults": 200
+  }
+}
+

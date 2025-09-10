@@ -1,0 +1,17 @@
+{
+  "features": {
+    "enableEmbeddings": true,
+    "enableTagging": true,
+    "enableCollections": true,
+    "enableBacklinks": true
+  },
+  "defaults": {
+    "paginationSize": 50,
+    "uiLocale": "en-US"
+  },
+  "display": {
+    "dateFormat": "yyyy-MM-dd",
+    "timeFormat": "HH:mm"
+  }
+}
+

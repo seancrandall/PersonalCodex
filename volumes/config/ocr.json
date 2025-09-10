@@ -1,0 +1,21 @@
+{
+  "engine": "openai",
+  "fallbackEngine": "tesseract",
+  "langs": ["eng"],
+  "openai": {
+    "model": "gpt-4o-mini",
+    "fallbackModel": "gpt-4o-mini",
+    "perPageDelaySec": 2.0
+  },
+  "tesseract": {
+    "psm": 6,
+    "oem": 1
+  },
+  "trocr": {
+    "modelId": "microsoft/trocr-large-handwritten",
+    "segment": "page",
+    "maxTokens": 512,
+    "lineHeight": 48
+  }
+}
+
