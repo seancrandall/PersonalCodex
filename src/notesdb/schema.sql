@@ -6,6 +6,27 @@ PRAGMA foreign_keys = ON;
 BEGIN;
 
 -- ===============================
+-- Ingest: Original Input Files (provenance)
+-- ===============================
+CREATE TABLE IF NOT EXISTS inputfile (
+    id               INTEGER PRIMARY KEY,
+    path             TEXT NOT NULL UNIQUE,    -- container-absolute path when ingested (e.g., /data/newdata/... or /data/txt/<sha>/...)
+    original_filename TEXT,                   -- basename at import time
+    sha256           TEXT UNIQUE,
+    size_bytes       INTEGER,
+    media_type       TEXT,                    -- e.g., application/pdf, image/png, text/plain
+    created_at       DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS note_inputfile (
+    note_id         INTEGER NOT NULL REFERENCES note(id) ON DELETE CASCADE,
+    inputfile_id    INTEGER NOT NULL REFERENCES inputfile(id) ON DELETE CASCADE,
+    PRIMARY KEY (note_id, inputfile_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_note_inputfile_input ON note_inputfile(inputfile_id);
+
+-- ===============================
 -- Core: Files (scanned page images)
 -- ===============================
 CREATE TABLE IF NOT EXISTS file (
