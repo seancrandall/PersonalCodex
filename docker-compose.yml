@@ -57,6 +57,59 @@ services:
     command: "newdata-ingest"
     restart: "no"
 
+  embeddings:
+    build:
+      context: ./infra/embeddings
+      dockerfile: Dockerfile
+      network: host
+    gpus: all
+    env_file:
+      - .env
+    environment:
+      - PATH=/data/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      - HF_HOME=/data/models
+      - CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-all}
+      - NOTES_DB=/data/notesdb/notes.db
+      - EMBEDDING_MODEL_NAME=${EMBEDDING_MODEL_NAME:-sentence-transformers/all-MiniLM-L12-v2}
+      - EMBEDDING_MODEL_DISTANCE=${EMBEDDING_MODEL_DISTANCE:-cosine}
+      - EMBEDDING_BATCH_SIZE=${EMBEDDING_BATCH_SIZE:-32}
+      - EMBEDDING_NORMALIZE=${EMBEDDING_NORMALIZE:-0}
+    volumes:
+      - ./volumes:/data
+    working_dir: /
+    entrypoint: ["/bin/sh", "-lc"]
+    command: "notesdb-embeddings"
+    restart: "no"
+
+  scheduler:
+    build:
+      context: ./infra/embeddings
+      dockerfile: Dockerfile
+      network: host
+    gpus: all
+    env_file:
+      - .env
+    environment:
+      - PATH=/data/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      - HF_HOME=/data/models
+      - CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-all}
+      - NOTES_DB=/data/notesdb/notes.db
+      - EMBEDDING_MODEL_NAME=${EMBEDDING_MODEL_NAME:-sentence-transformers/all-MiniLM-L12-v2}
+      - EMBEDDING_MODEL_DISTANCE=${EMBEDDING_MODEL_DISTANCE:-cosine}
+      - EMBEDDING_BATCH_SIZE=${EMBEDDING_BATCH_SIZE:-32}
+      - EMBEDDING_NORMALIZE=${EMBEDDING_NORMALIZE:-0}
+      - EMBEDDINGS_CRON=${EMBEDDINGS_CRON:-0 3 * * *}
+      - EMBEDDINGS_COMMAND=${EMBEDDINGS_COMMAND:-notesdb-embeddings}
+      - EMBEDDINGS_SCHEDULER_VERBOSE=${EMBEDDINGS_SCHEDULER_VERBOSE:-1}
+    volumes:
+      - ./volumes:/data
+    working_dir: /
+    entrypoint: ["/bin/sh", "-lc"]
+    command: "notesdb-embeddings-scheduler"
+    restart: unless-stopped
+    depends_on:
+      - embeddings
+
   web:
     build:
       context: ./web

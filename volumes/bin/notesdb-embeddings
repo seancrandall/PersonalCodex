@@ -1,0 +1,323 @@
+#!/usr/bin/env python
+"""
+Generate embeddings for notes that do not yet have vectors in note_embedding.
+
+The command inspects the configured notes database, inserts the embedding model
+metadata if needed, and batches through missing notes to populate embeddings.
+"""
+from __future__ import annotations
+
+import argparse
+import os
+import sqlite3
+import sys
+import time
+from pathlib import Path
+from typing import Iterable
+
+import numpy as np
+
+try:
+    from sentence_transformers import SentenceTransformer
+except ImportError as exc:  # pragma: no cover - deferred import gives actionable error
+    raise SystemExit(
+        "sentence-transformers is required. Ensure the embeddings container image "
+        "installs it or install locally when running on the host."
+    ) from exc
+
+DEFAULT_DB = "/data/notesdb/notes.db"
+DEFAULT_MODEL = "sentence-transformers/all-MiniLM-L12-v2"
+DEFAULT_DISTANCE = "cosine"
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--database",
+        default=os.environ.get("NOTES_DB", DEFAULT_DB),
+        help="Path to notes.db (default: %(default)s or $NOTES_DB).",
+    )
+    parser.add_argument(
+        "--model-name",
+        default=os.environ.get("EMBEDDING_MODEL_NAME", DEFAULT_MODEL),
+        help="SentenceTransformer model name (default: %(default)s or $EMBEDDING_MODEL_NAME).",
+    )
+    parser.add_argument(
+        "--model-path",
+        default=os.environ.get("EMBEDDING_MODEL_PATH"),
+        help="Optional local path to load the embedding model from.",
+    )
+    parser.add_argument(
+        "--distance",
+        default=os.environ.get("EMBEDDING_MODEL_DISTANCE", DEFAULT_DISTANCE),
+        choices=("cosine", "l2", "dot"),
+        help="Similarity metric recorded alongside the model (default: %(default)s).",
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=int(os.environ.get("EMBEDDING_BATCH_SIZE", "32")),
+        help="Number of notes to encode per batch.",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        help="Optional maximum number of notes to encode this run.",
+    )
+    parser.add_argument(
+        "--normalize",
+        action="store_true",
+        default=os.environ.get("EMBEDDING_NORMALIZE", "0") not in ("0", "false", "False"),
+        help="L2-normalize embeddings before storing.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Inspect how many notes need embeddings without writing results.",
+    )
+    parser.add_argument(
+        "--device",
+        default=os.environ.get("EMBEDDING_DEVICE"),
+        help="Force device (e.g., cuda, cuda:0, cpu). Defaults to auto-detection.",
+    )
+    return parser.parse_args()
+
+
+def connect(db_path: str) -> sqlite3.Connection:
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    return conn
+
+
+def ensure_model_row(conn: sqlite3.Connection, name: str, dims: int, distance: str) -> int:
+    with conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO embedding_model(name, dims, distance) VALUES (?, ?, ?)",
+            (name, dims, distance),
+        )
+    row = conn.execute(
+        "SELECT id, dims, distance FROM embedding_model WHERE name = ?", (name,)
+    ).fetchone()
+    if row is None:
+        raise RuntimeError("Failed to read embedding_model row after insert.")
+    if row["dims"] != dims:
+        raise ValueError(
+            f"Embedding model dims mismatch for '{name}': existing {row['dims']} vs {dims}."
+        )
+    if row["distance"] != distance:
+        raise ValueError(
+            f"Embedding model distance mismatch for '{name}': existing {row['distance']} vs {distance}."
+        )
+    return int(row["id"])
+
+
+def get_existing_model(conn: sqlite3.Connection, name: str) -> sqlite3.Row | None:
+    return conn.execute(
+        "SELECT id, dims, distance FROM embedding_model WHERE name = ?", (name,)
+    ).fetchone()
+
+
+def count_missing_notes(conn: sqlite3.Connection, model_id: int) -> int:
+    query = """
+        SELECT COUNT(1)
+        FROM note n
+        LEFT JOIN note_embedding e ON e.note_id = n.id AND e.model_id = ?
+        WHERE e.note_id IS NULL
+          AND n.content IS NOT NULL
+          AND TRIM(n.content) <> ''
+    """
+    row = conn.execute(query, (model_id,)).fetchone()
+    return int(row[0]) if row is not None else 0
+
+
+def count_missing_for_name(conn: sqlite3.Connection, name: str) -> int:
+    query = """
+        SELECT COUNT(1)
+        FROM note n
+        WHERE NOT EXISTS (
+            SELECT 1
+            FROM embedding_model em
+            JOIN note_embedding ne ON ne.model_id = em.id
+            WHERE em.name = ? AND ne.note_id = n.id
+        )
+          AND n.content IS NOT NULL
+          AND TRIM(n.content) <> ''
+    """
+    row = conn.execute(query, (name,)).fetchone()
+    return int(row[0]) if row is not None else 0
+
+
+def note_batches(
+    conn: sqlite3.Connection,
+    model_id: int,
+    batch_size: int,
+    limit: int | None,
+) -> Iterable[list[sqlite3.Row]]:
+    remaining = limit
+    while True:
+        batch_limit = batch_size
+        if remaining is not None:
+            if remaining <= 0:
+                return
+            batch_limit = min(batch_limit, remaining)
+        rows = conn.execute(
+            """
+            SELECT n.id, n.content
+            FROM note AS n
+            LEFT JOIN note_embedding AS e
+                ON e.note_id = n.id AND e.model_id = ?
+            WHERE e.note_id IS NULL
+              AND n.content IS NOT NULL
+              AND TRIM(n.content) <> ''
+            ORDER BY n.id
+            LIMIT ?
+            """,
+            (model_id, batch_limit),
+        ).fetchall()
+        if not rows:
+            return
+        yield rows
+        if remaining is not None:
+            remaining -= len(rows)
+
+
+def to_blob(vector: np.ndarray) -> bytes:
+    if vector.dtype != np.float32:
+        vector = vector.astype(np.float32, copy=False)
+    return vector.tobytes()
+
+
+def main() -> int:
+    args = parse_args()
+    db_path = Path(args.database)
+    if not db_path.exists():
+        print(f"[notesdb-embeddings] Database not found: {db_path}", file=sys.stderr)
+        return 1
+
+    if args.batch_size <= 0:
+        print("[notesdb-embeddings] Batch size must be positive.", file=sys.stderr)
+        return 1
+
+    conn = connect(str(db_path))
+    distance = args.distance
+
+    # Count notes first (without loading model when dry-run)
+    with conn:
+        conn.execute("PRAGMA mmap_size = 268435456")  # 256 MiB for faster reads
+
+    model_name = args.model_name
+   model_path = args.model_path
+
+    print(
+        f"[notesdb-embeddings] Inspecting notes without embeddings for model '{model_name}'.",
+        flush=True,
+    )
+
+    # Load model unless we are purely inspecting counts.
+    device = args.device
+    existing_model = get_existing_model(conn, model_name)
+
+    if args.dry_run:
+        total_missing = count_missing_for_name(conn, model_name)
+        if existing_model is not None:
+            print(
+                f"[notesdb-embeddings] Dry run: {total_missing} note(s) missing embeddings "
+                f"for '{model_name}' (dims={existing_model['dims']}, distance={existing_model['distance']})."
+            )
+        else:
+            print(
+                f"[notesdb-embeddings] Dry run: {total_missing} note(s) would be encoded "
+                f"for new model '{model_name}'."
+            )
+        return 0
+
+    try:
+        load_start = time.time()
+        model = SentenceTransformer(model_path or model_name, device=device)
+        dims = int(model.get_sentence_embedding_dimension())
+        print(
+            f"[notesdb-embeddings] Model loaded in {time.time() - load_start:.2f}s "
+            f"(dims={dims}, device={model.device}).",
+            flush=True,
+        )
+    except OSError as exc:
+        print(f"[notesdb-embeddings] Failed to load model '{model_name}': {exc}", file=sys.stderr)
+        return 1
+
+    if existing_model is not None:
+        if existing_model["dims"] != dims:
+            raise ValueError(
+                f"Embedding dimension mismatch for '{model_name}': stored "
+                f"{existing_model['dims']} vs runtime {dims}."
+            )
+        if existing_model["distance"] != distance:
+            raise ValueError(
+                f"Embedding distance mismatch for '{model_name}': stored "
+                f"{existing_model['distance']} vs configured {distance}."
+            )
+
+    model_id = ensure_model_row(conn, model_name, dims, distance)
+
+    total_available = count_missing_notes(conn, model_id)
+    total_planned = (
+        min(total_available, args.limit) if args.limit is not None else total_available
+    )
+    if total_planned == 0:
+        print("[notesdb-embeddings] No notes require embeddings.")
+        return 0
+
+    if args.limit is not None and total_available > args.limit:
+        print(
+            f"[notesdb-embeddings] Encoding {total_planned} of {total_available} "
+            f"queued note(s) (limit applied).",
+            flush=True,
+        )
+    else:
+        print(
+            f"[notesdb-embeddings] Encoding {total_planned} note(s) "
+            f"in batches of {args.batch_size}.",
+            flush=True,
+        )
+
+    encoded = 0
+    start_time = time.time()
+
+    for rows in note_batches(conn, model_id, args.batch_size, args.limit):
+        texts = [row["content"] for row in rows]
+        if not texts:
+            continue
+        embeddings = model.encode(
+            texts,
+            batch_size=args.batch_size,
+            convert_to_numpy=True,
+            normalize_embeddings=args.normalize,
+            show_progress_bar=False,
+        )
+        if embeddings.ndim != 2:
+            raise RuntimeError(f"Expected 2D embeddings array, got shape {embeddings.shape}.")
+
+        payload = [
+            (int(row["id"]), model_id, sqlite3.Binary(to_blob(vec)))
+            for row, vec in zip(rows, embeddings)
+        ]
+        with conn:
+            conn.executemany(
+                "INSERT OR REPLACE INTO note_embedding(note_id, model_id, vector) "
+                "VALUES (?, ?, ?)",
+                payload,
+            )
+        encoded += len(payload)
+        print(f"[notesdb-embeddings] Encoded batch: {encoded}/{total_planned}", flush=True)
+
+    duration = time.time() - start_time
+    rate = encoded / duration if duration > 0 else float("inf")
+    print(
+        f"[notesdb-embeddings] Completed {encoded} embeddings in {duration:.2f}s "
+        f"({rate:.2f} notes/s)."
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

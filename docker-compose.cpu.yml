@@ -12,3 +12,12 @@ services:
     environment:
       - CUDA_VISIBLE_DEVICES=
 
+  embeddings:
+    gpus: null
+    environment:
+      - CUDA_VISIBLE_DEVICES=
+
+  scheduler:
+    gpus: null
+    environment:
+      - CUDA_VISIBLE_DEVICES=

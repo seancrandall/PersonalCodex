@@ -9,6 +9,8 @@ A self-hosted, containerized infrastructure for creating searchable scripture st
 - GPU default: `docker compose up --build` (requests GPU if available)
 - CPU override: `docker compose -f docker-compose.yml -f docker-compose.cpu.yml up --build`
 - Data and models live under `./volumes` on host, mounted at `/data` in containers.
+- Backfill embeddings on demand: `docker compose run --rm embeddings`
+- Continuous embeddings updates: `docker compose up scheduler` (uses cron defined by `EMBEDDINGS_CRON`, defaults to nightly at 03:00 local time)
 
 ## Project Goals & Scope
 - Provide a self-hosted web UI to review handwritten scripture notes and general journals, with fast search, tagging, and filtering.
@@ -84,6 +86,14 @@ Notes
 - Personal data under `volumes/*` is ignored by Git except `volumes/bin/` and `volumes/scripdb/`.
 - Passage verse IDs reference `standardworks.db`; validation is done by attaching that DB during checks.
  - Ingestion should prefer files where `fully_processed = 0` and update pointers as it loads pages. The rebuild script can fix up older records.
+
+## Embeddings Service
+
+- CLI entrypoint: `volumes/bin/notesdb-embeddings` reads `notes.db` and fills `note_embedding` for the configured model.
+- Docker service: `docker compose run --rm embeddings` performs a single backfill (uses GPU when available).
+- Scheduler: `docker compose up -d scheduler` keeps embeddings fresh based on `EMBEDDINGS_CRON` (cron syntax, defaults to nightly). Override the command with `EMBEDDINGS_COMMAND` if you need a custom wrapper.
+- Configuration: set `EMBEDDING_MODEL_NAME`, optional `EMBEDDING_MODEL_PATH` for offline weights, `EMBEDDING_BATCH_SIZE`, and `EMBEDDING_NORMALIZE` in `.env`.
+- The scheduler watches for graceful shutdown signals and logs each execution with timestamps for easier auditing.
 
 ## Troubleshooting: DNS/Networking in CUDA/PyTorch Builds
 

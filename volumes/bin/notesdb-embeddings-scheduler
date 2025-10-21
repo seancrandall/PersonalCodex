@@ -1,0 +1,165 @@
+#!/usr/bin/env python
+"""
+Minimal scheduler that executes the embeddings task on a cron-style cadence.
+
+It is intended to run inside the scheduler container, honouring the same
+environment configuration as the embeddings job.
+"""
+from __future__ import annotations
+
+import argparse
+import os
+import shlex
+import signal
+import subprocess
+import sys
+import time
+from datetime import datetime
+
+try:
+    from croniter import croniter
+except ImportError as exc:  # pragma: no cover - clearer runtime feedback
+    raise SystemExit(
+        "croniter is required. Ensure the scheduler/embeddings image installs it."
+    ) from exc
+
+DEFAULT_COMMAND = "notesdb-embeddings"
+DEFAULT_CRON = "0 3 * * *"  # nightly at 03:00 server time
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--cron",
+        default=os.environ.get("EMBEDDINGS_CRON", DEFAULT_CRON),
+        help="Cron expression for scheduling (default: %(default)s or $EMBEDDINGS_CRON).",
+    )
+    parser.add_argument(
+        "--command",
+        default=os.environ.get("EMBEDDINGS_COMMAND", DEFAULT_COMMAND),
+        help="Command to execute (default: %(default)s or $EMBEDDINGS_COMMAND).",
+    )
+    parser.add_argument(
+        "--run-immediately",
+        action="store_true",
+        default=os.environ.get("EMBEDDINGS_RUN_IMMEDIATELY", "0")
+        not in ("0", "false", "False"),
+        help="Run the command once on startup before scheduling.",
+    )
+    parser.add_argument(
+        "--timezone",
+        choices=("local", "utc"),
+        default=os.environ.get("EMBEDDINGS_CRON_TZ", "local"),
+        help="Interpret the cron expression in local time or UTC (default: %(default)s).",
+    )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        default=os.environ.get("EMBEDDINGS_SCHEDULER_VERBOSE", "0")
+        not in ("0", "false", "False"),
+        help="Print verbose scheduler logs.",
+    )
+    return parser.parse_args()
+
+
+def log(message: str, *, verbose: bool = True) -> None:
+    timestamp = datetime.now().isoformat(timespec="seconds")
+    if verbose:
+        print(f"[notesdb-embeddings-scheduler][{timestamp}] {message}", flush=True)
+
+
+def wait_until(target_time: datetime, tz: str, should_stop) -> None:
+    """Sleep until the target time, waking periodically to allow signal handling."""
+    while True:
+        if should_stop():
+            return
+        now = datetime.utcnow() if tz == "utc" else datetime.now()
+        remaining = (target_time - now).total_seconds()
+        if remaining <= 0:
+            return
+        try:
+            time.sleep(min(remaining, 60))
+        except InterruptedError:
+            return
+
+
+def run_command(command: str, verbose: bool) -> int:
+    args = shlex.split(command)
+    log(f"Running command: {args}", verbose=verbose)
+    try:
+        proc = subprocess.run(args, check=False)
+    except FileNotFoundError:
+        print(
+            f"[notesdb-embeddings-scheduler] Command not found: {args[0]}",
+            file=sys.stderr,
+            flush=True,
+        )
+        return 127
+    if proc.returncode == 0:
+        log("Command completed successfully.", verbose=verbose)
+    else:
+        print(
+            f"[notesdb-embeddings-scheduler] Command exited with {proc.returncode}.",
+            file=sys.stderr,
+            flush=True,
+        )
+    return proc.returncode
+
+
+def main() -> int:
+    args = parse_args()
+    tz = args.timezone
+    verbose = args.verbose
+
+    # Ensure cron expression is valid before entering sleep cycle.
+    base_time = datetime.utcnow() if tz == "utc" else datetime.now()
+    try:
+        iterator = croniter(args.cron, base_time)
+    except (ValueError, KeyError) as exc:
+        print(f"[notesdb-embeddings-scheduler] Invalid cron expression: {exc}", file=sys.stderr)
+        return 1
+
+    stop = False
+
+    def handle_signal(signum: int, frame: object | None) -> None:
+        nonlocal stop
+        stop = True
+        log(f"Received signal {signum}; shutting down after current cycle.", verbose=verbose)
+
+    signal.signal(signal.SIGTERM, handle_signal)
+    signal.signal(signal.SIGINT, handle_signal)
+
+    if args.run_immediately:
+        result = run_command(args.command, verbose=verbose)
+        if result != 0:
+            print(
+                "[notesdb-embeddings-scheduler] Immediate run failed; continuing to schedule.",
+                file=sys.stderr,
+                flush=True,
+            )
+
+    while not stop:
+        now = datetime.utcnow() if tz == "utc" else datetime.now()
+        next_run = iterator.get_next(datetime)
+        log(f"Next run scheduled for {next_run.isoformat(sep=' ')} ({tz}).", verbose=verbose)
+        wait_until(next_run, tz, lambda: stop)
+        if stop:
+            break
+        result = run_command(args.command, verbose=verbose)
+        if result != 0:
+            print(
+                f"[notesdb-embeddings-scheduler] Command exit code {result}; "
+                "will retry on the next scheduled run.",
+                file=sys.stderr,
+                flush=True,
+            )
+        # Re-create iterator anchored at the execution time to avoid drift.
+        anchor = datetime.utcnow() if tz == "utc" else datetime.now()
+        iterator = croniter(args.cron, anchor)
+
+    log("Scheduler exiting.", verbose=verbose)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
