@@ -207,7 +207,7 @@ def main() -> int:
         conn.execute("PRAGMA mmap_size = 268435456")  # 256 MiB for faster reads
 
     model_name = args.model_name
-   model_path = args.model_path
+    model_path = args.model_path
 
     print(
         f"[notesdb-embeddings] Inspecting notes without embeddings for model '{model_name}'.",
